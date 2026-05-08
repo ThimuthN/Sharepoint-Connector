@@ -14,8 +14,6 @@ class TestSharePointClient:
             "access_token": "test_token_123",
             "refresh_token": "test_refresh_456",
             "expires_at": (datetime.utcnow() + timedelta(hours=1)).isoformat(),
-            "client_id": "test_client",
-            "client_secret": "test_secret",
             "site_id": "site_123",
             "site_name": "Test Site",
             "drive_id": "drive_456",
