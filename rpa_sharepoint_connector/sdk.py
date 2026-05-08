@@ -47,8 +47,11 @@ class SharePointClient:
         self.drive_id = profile_data["drive_id"]
         self.folder_id = profile_data["folder_id"]
 
-        # Initialize client (uses Innobot public-client app)
-        self.auth = MicrosoftAuth()
+        # Initialize auth using profile-bound app/tenant when available.
+        self.auth = MicrosoftAuth(
+            client_id=profile_data.get("client_id"),
+            tenant_id=profile_data.get("tenant_id"),
+        )
         self._ensure_valid_token()
         self.graph = GraphClient(self.profile_data["access_token"])
 

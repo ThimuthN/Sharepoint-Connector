@@ -134,6 +134,8 @@ class TestConfigureCommand:
         args.store_dir = None
         args.force = False
         args.redirect_uri = None
+        args.client_id = None
+        args.tenant_id = None
 
         with patch("rpa_sharepoint_connector.cli.TokenStore") as MockStore:
             mock_store = MagicMock()
@@ -172,12 +174,18 @@ class TestConfigureCommand:
                     output = "\n".join([str(call) for call in mock_print.call_args_list])
                     assert "Authorization successful" in output
 
+                    saved_profile = mock_store.save_profile.call_args[0][1]
+                    assert saved_profile["client_id"] == mock_auth.client_id
+                    assert saved_profile["tenant_id"] == mock_auth.tenant_id
+
     def test_configure_requires_force_for_existing_profile(self):
         args = MagicMock()
         args.profile = "test"
         args.store_dir = None
         args.force = False
         args.redirect_uri = None
+        args.client_id = None
+        args.tenant_id = None
 
         with patch("rpa_sharepoint_connector.cli.TokenStore") as MockStore:
             mock_store = MagicMock()
@@ -193,6 +201,8 @@ class TestConfigureCommand:
         args.store_dir = None
         args.force = True
         args.redirect_uri = None
+        args.client_id = None
+        args.tenant_id = None
 
         with patch("rpa_sharepoint_connector.cli.TokenStore") as MockStore:
             mock_store = MagicMock()
@@ -233,6 +243,8 @@ class TestConfigureCommand:
         args.store_dir = str(tmp_path)
         args.force = False
         args.redirect_uri = None
+        args.client_id = None
+        args.tenant_id = None
 
         with patch("rpa_sharepoint_connector.cli.MicrosoftBrowserAuth") as MockAuth:
             mock_auth = MagicMock()
@@ -271,6 +283,8 @@ class TestConfigureCommand:
         args.store_dir = None
         args.force = False
         args.redirect_uri = "http://localhost:9999/custom"
+        args.client_id = None
+        args.tenant_id = None
 
         with patch("rpa_sharepoint_connector.cli.TokenStore") as MockStore:
             mock_store = MagicMock()
@@ -304,5 +318,58 @@ class TestConfigureCommand:
                     cmd_configure(args)
 
                 MockAuth.assert_called_once_with(
+                    client_id=None,
+                    tenant_id=None,
                     redirect_uri="http://localhost:9999/custom"
                 )
+
+    def test_configure_allows_client_and_tenant_override(self):
+        args = MagicMock()
+        args.profile = "test"
+        args.store_dir = None
+        args.force = False
+        args.redirect_uri = None
+        args.client_id = "client_abc"
+        args.tenant_id = "organizations"
+
+        with patch("rpa_sharepoint_connector.cli.TokenStore") as MockStore:
+            mock_store = MagicMock()
+            mock_store.load_profile.return_value = None
+            MockStore.return_value = mock_store
+
+            with patch("rpa_sharepoint_connector.cli.MicrosoftBrowserAuth") as MockAuth:
+                mock_auth = MagicMock()
+                MockAuth.return_value = mock_auth
+                mock_auth.client_id = "client_abc"
+                mock_auth.tenant_id = "organizations"
+                mock_auth.build_authorization_request.return_value = {
+                    "state": "state_123",
+                    "code_verifier": "verifier_abc",
+                    "code_challenge": "challenge_xyz",
+                    "authorization_url": "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?state=state_123",
+                    "redirect_uri": "http://localhost:8765/callback",
+                }
+                mock_auth.authenticate.return_value = {
+                    "tokens": {
+                        "access_token": "token_123",
+                        "refresh_token": "refresh_456",
+                        "expires_in": 3600,
+                    },
+                    "user_info": {
+                        "id": "user_id",
+                        "mail": "user@example.com",
+                    },
+                }
+
+                with patch("builtins.print"):
+                    cmd_configure(args)
+
+                MockAuth.assert_called_once_with(
+                    client_id="client_abc",
+                    tenant_id="organizations",
+                    redirect_uri=None,
+                )
+
+                saved_profile = mock_store.save_profile.call_args[0][1]
+                assert saved_profile["client_id"] == "client_abc"
+                assert saved_profile["tenant_id"] == "organizations"

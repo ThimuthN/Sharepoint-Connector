@@ -30,6 +30,8 @@ def _save_profile(
     store_dir: str,
     tokens: dict,
     user_info: dict,
+    client_id: str,
+    tenant_id: str,
 ) -> str:
     """Persist token/user data in the standard profile format."""
     store = TokenStore(store_dir=store_dir)
@@ -48,6 +50,8 @@ def _save_profile(
         "folder_path": "",
         "user_id": user_info.get("id", ""),
         "user_email": user_email,
+        "client_id": client_id,
+        "tenant_id": tenant_id,
     }
     store.save_profile(profile_name, profile_data)
     return user_email
@@ -59,6 +63,8 @@ def cmd_configure(args):
     store_dir = args.store_dir
     force = bool(getattr(args, "force", False))
     redirect_uri = getattr(args, "redirect_uri", None)
+    client_id = getattr(args, "client_id", None)
+    tenant_id = getattr(args, "tenant_id", None)
 
     print(f"\nConfiguring profile: {profile_name}")
     print("=" * 60)
@@ -73,11 +79,16 @@ def cmd_configure(args):
             )
             sys.exit(1)
 
-        auth = MicrosoftBrowserAuth(redirect_uri=redirect_uri)
+        auth = MicrosoftBrowserAuth(
+            client_id=client_id,
+            tenant_id=tenant_id,
+            redirect_uri=redirect_uri,
+        )
         request = auth.build_authorization_request()
 
         print("\nMicrosoft Browser Login Required")
         print("-" * 60)
+        print(f"Client ID: {auth.client_id}")
         print(f"Tenant: {auth.tenant_id}")
         print(f"Go to: {request['authorization_url']}")
         print(f"Redirect URI: {request['redirect_uri']}")
@@ -97,7 +108,14 @@ def cmd_configure(args):
         user_email = _resolve_user_email(user_info)
         print(f"OK Logged in as: {user_email}")
 
-        _save_profile(profile_name, store_dir, tokens, user_info)
+        _save_profile(
+            profile_name=profile_name,
+            store_dir=store_dir,
+            tokens=tokens,
+            user_info=user_info,
+            client_id=auth.client_id,
+            tenant_id=auth.tenant_id,
+        )
         print(f"OK Profile '{profile_name}' saved")
         print()
 
@@ -245,6 +263,14 @@ def main():
     configure_parser.add_argument(
         "--redirect-uri",
         help="Override browser callback redirect URI (default: http://localhost/callback)",
+    )
+    configure_parser.add_argument(
+        "--client-id",
+        help="Override Microsoft public-client app ID for this profile",
+    )
+    configure_parser.add_argument(
+        "--tenant-id",
+        help="Override tenant endpoint (e.g., organizations, common, or tenant GUID)",
     )
     configure_parser.set_defaults(func=cmd_configure)
 

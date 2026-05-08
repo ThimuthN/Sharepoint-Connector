@@ -47,6 +47,7 @@ Optional setup override:
 
 ```bash
 python -m rpa_sharepoint_connector configure --profile client_a --redirect-uri http://localhost:8765/callback
+python -m rpa_sharepoint_connector configure --profile client_a --client-id <app_id> --tenant-id organizations
 ```
 
 ## Authentication Model
@@ -56,6 +57,7 @@ python -m rpa_sharepoint_connector configure --profile client_a --redirect-uri h
 - Strict state validation on callback
 - Public-client only (no client secret)
 - Refresh token used for silent runtime token renewal
+- `client_id` and `tenant_id` used during setup are saved in the encrypted profile and reused at runtime
 
 ## Azure App Requirements
 

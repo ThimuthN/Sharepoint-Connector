@@ -198,6 +198,8 @@ class TestRuntimeNoBrowser:
             "folder_path": "",
             "user_id": "user_1",
             "user_email": "user@example.com",
+            "client_id": "client_123",
+            "tenant_id": "organizations",
         }
 
         with patch("rpa_sharepoint_connector.sdk.TokenStore") as MockStore:
@@ -214,6 +216,10 @@ class TestRuntimeNoBrowser:
                         from rpa_sharepoint_connector import SharePointClient
                         SharePointClient(profile="demo")
 
+                        MockAuth.assert_called_once_with(
+                            client_id="client_123",
+                            tenant_id="organizations",
+                        )
                         mock_open.assert_not_called()
 
     def test_future_runtime_loads_saved_refresh_token(self):
@@ -230,6 +236,8 @@ class TestRuntimeNoBrowser:
             "folder_path": "",
             "user_id": "user_1",
             "user_email": "user@example.com",
+            "client_id": "client_123",
+            "tenant_id": "organizations",
         }
 
         with patch("rpa_sharepoint_connector.sdk.TokenStore") as MockStore:
@@ -262,6 +270,8 @@ class TestRuntimeNoBrowser:
             "folder_path": "",
             "user_id": "user_1",
             "user_email": "user@example.com",
+            "client_id": "client_123",
+            "tenant_id": "organizations",
         }
 
         with patch("rpa_sharepoint_connector.sdk.TokenStore") as MockStore:
