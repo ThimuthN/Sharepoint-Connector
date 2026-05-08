@@ -4,8 +4,11 @@ import logging
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
+from urllib.parse import unquote, urlparse
 
 from .browser_auth import MicrosoftBrowserAuth
+from .auth import MicrosoftAuth
+from .graph_client import GraphClient
 from .token_store import TokenStore
 from .sdk import SharePointClient
 
@@ -55,6 +58,148 @@ def _save_profile(
     }
     store.save_profile(profile_name, profile_data)
     return user_email
+
+
+def _normalize_name(value: str) -> str:
+    """Normalize text for case/spacing-insensitive matching."""
+    return "".join(ch.lower() for ch in value if ch.isalnum())
+
+
+def _parse_sharepoint_url(sharepoint_url: str) -> dict:
+    """Parse a SharePoint browser URL into host/site/library/folder hints."""
+    parsed = urlparse(sharepoint_url)
+    if not parsed.scheme.startswith("http") or not parsed.hostname:
+        raise ValueError("Invalid SharePoint URL.")
+
+    decoded_path = unquote(parsed.path or "")
+    for marker in ("/:f:/r", "/:u:/r", "/:x:/r", "/:w:/r", "/:b:/r"):
+        if marker in decoded_path:
+            decoded_path = decoded_path.split(marker, 1)[1]
+            break
+
+    if not decoded_path.startswith("/"):
+        decoded_path = "/" + decoded_path
+
+    segments = [seg for seg in decoded_path.split("/") if seg]
+    if len(segments) < 2 or segments[0] not in ("sites", "teams"):
+        raise ValueError(
+            "Could not parse site path from URL. Expected /sites/<name> or /teams/<name>."
+        )
+
+    site_path = f"/{segments[0]}/{segments[1]}"
+    library_name = segments[2] if len(segments) >= 3 else "Documents"
+    folder_path = "/".join(segments[3:]) if len(segments) >= 4 else ""
+
+    return {
+        "hostname": parsed.hostname,
+        "site_path": site_path,
+        "library_name": library_name,
+        "folder_path": folder_path,
+    }
+
+
+def _select_drive(drives: list, requested_library: str) -> dict:
+    """Select best matching document library drive."""
+    requested = _normalize_name(requested_library)
+    aliases = {requested}
+    if requested == "shareddocuments":
+        aliases.add("documents")
+    if requested == "documents":
+        aliases.add("shareddocuments")
+
+    for drive in drives:
+        candidates = {_normalize_name(drive.get("name", ""))}
+        web_url = drive.get("webUrl", "")
+        if web_url:
+            tail = unquote(urlparse(web_url).path.split("/")[-1])
+            candidates.add(_normalize_name(tail))
+        if aliases.intersection(candidates):
+            return drive
+
+    raise ValueError(
+        f"Library '{requested_library}' not found. Available libraries: "
+        f"{', '.join(d.get('name', '<unknown>') for d in drives)}"
+    )
+
+
+def _ensure_profile_token(
+    profile_name: str,
+    profile_data: dict,
+    store: TokenStore,
+) -> dict:
+    """Refresh profile access token if required and persist updates."""
+    expires_at = datetime.fromisoformat(profile_data["expires_at"])
+    auth = MicrosoftAuth(
+        client_id=profile_data.get("client_id"),
+        tenant_id=profile_data.get("tenant_id"),
+    )
+    if auth.is_token_expired(expires_at):
+        token_response = auth.refresh_token(profile_data["refresh_token"])
+        profile_data["access_token"] = token_response["access_token"]
+        profile_data["refresh_token"] = token_response.get(
+            "refresh_token", profile_data["refresh_token"]
+        )
+        profile_data["expires_at"] = (
+            datetime.utcnow() + timedelta(seconds=token_response.get("expires_in", 3600))
+        ).isoformat()
+        store.save_profile(profile_name, profile_data)
+    return profile_data
+
+
+def cmd_set_target(args):
+    """Bind configured profile to a SharePoint site/library/folder target."""
+    profile_name = args.profile or "default"
+    store_dir = args.store_dir
+    sharepoint_url = args.sharepoint_url
+    library_override = args.library
+    folder_override = args.folder
+
+    try:
+        store = TokenStore(store_dir=store_dir)
+        profile_data = store.load_profile(profile_name)
+        if not profile_data:
+            print(
+                f"Profile '{profile_name}' not found. "
+                f"Run: python -m rpa_sharepoint_connector configure --profile {profile_name}"
+            )
+            sys.exit(1)
+
+        profile_data = _ensure_profile_token(profile_name, profile_data, store)
+
+        parsed = _parse_sharepoint_url(sharepoint_url)
+        hostname = parsed["hostname"]
+        site_path = parsed["site_path"]
+        library_name = library_override or parsed["library_name"] or "Documents"
+        folder_path = folder_override if folder_override is not None else parsed["folder_path"]
+
+        graph = GraphClient(profile_data["access_token"])
+        site = graph._get(f"/sites/{hostname}:{site_path}")
+        drives = graph.list_drives(site["id"])
+        drive = _select_drive(drives, library_name)
+        folder_id = "root"
+        if folder_path:
+            folder_id = graph._ensure_folder_path(drive["id"], folder_path)
+
+        profile_data.update(
+            {
+                "site_id": site["id"],
+                "site_name": site.get("displayName", site_path),
+                "drive_id": drive["id"],
+                "drive_name": drive.get("name", library_name),
+                "folder_id": folder_id,
+                "folder_path": folder_path,
+            }
+        )
+        store.save_profile(profile_name, profile_data)
+
+        print(f"OK Target configured for profile '{profile_name}'")
+        print(f"Site: {profile_data['site_name']}")
+        print(f"Library: {profile_data['drive_name']}")
+        print(f"Folder: {profile_data['folder_path'] or '(root)'}")
+        print()
+    except Exception as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
 
 
 def cmd_configure(args):
@@ -288,6 +433,29 @@ def main():
     test_parser.add_argument("file", help="File to upload")
     test_parser.add_argument("--profile", "-p", help="Profile name (default: default)")
     test_parser.set_defaults(func=cmd_test_upload)
+
+    # set-target
+    target_parser = subparsers.add_parser(
+        "set-target",
+        help="Bind profile to SharePoint site/library/folder from a URL",
+    )
+    target_parser.add_argument(
+        "--profile", "-p", help="Profile name (default: default)"
+    )
+    target_parser.add_argument(
+        "--sharepoint-url",
+        required=True,
+        help="SharePoint site/library/folder URL from browser",
+    )
+    target_parser.add_argument(
+        "--library",
+        help="Override library name (defaults to URL-derived value)",
+    )
+    target_parser.add_argument(
+        "--folder",
+        help="Override folder path inside library (defaults to URL-derived value)",
+    )
+    target_parser.set_defaults(func=cmd_set_target)
 
     # list
     list_parser = subparsers.add_parser("list", help="List saved profiles")
