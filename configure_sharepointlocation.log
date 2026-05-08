@@ -1,0 +1,12 @@
+
+Configuring profile: sharepointlocation
+============================================================
+
+🔐 Microsoft Device Login Required
+------------------------------------------------------------
+Go to: https://login.microsoft.com/device
+Enter code: H3GJJ6RM2
+
+Waiting for you to authorize...
+------------------------------------------------------------
+✗ Error: Device code polling timed out. Run: python -m rpa_sharepoint_connector configure
