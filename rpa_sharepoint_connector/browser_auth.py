@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import secrets
+import socket
 import threading
 import time
 import webbrowser
@@ -19,8 +20,17 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_REDIRECT_URI = os.getenv(
     "MICROSOFT_BROWSER_REDIRECT_URI",
-    "http://localhost:8765/callback",
+    "http://localhost/callback",
 )
+
+
+def _find_free_port(hostname: str = "localhost") -> int:
+    """Find an available local TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        bind_host = "127.0.0.1" if hostname in ("localhost", "127.0.0.1") else hostname
+        sock.bind((bind_host, 0))
+        sock.listen(1)
+        return int(sock.getsockname()[1])
 
 
 class LocalOAuthCallbackServer:
@@ -37,12 +47,9 @@ class LocalOAuthCallbackServer:
             raise ValueError("Redirect URI must use http for local callback server.")
         if parsed.hostname not in ("localhost", "127.0.0.1"):
             raise ValueError("Redirect URI host must be localhost or 127.0.0.1.")
-        if not parsed.port:
-            raise ValueError("Redirect URI must include an explicit port.")
-
         self.expected_state = expected_state
         self.host = parsed.hostname
-        self.port = parsed.port
+        self.port = parsed.port or _find_free_port(parsed.hostname or "localhost")
         self.callback_path = parsed.path or "/callback"
         self.server_class = server_class
         self.received_code: Optional[str] = None
@@ -151,6 +158,22 @@ class MicrosoftBrowserAuth:
             "Files.ReadWrite.All",
         ]
         self.authority = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0"
+        self._active_redirect_uri: Optional[str] = None
+
+    def _resolve_redirect_uri(self) -> str:
+        """Resolve redirect URI, auto-selecting port for localhost when omitted."""
+        parsed = urlparse(self.redirect_uri)
+        if parsed.scheme != "http":
+            raise ValueError("Redirect URI must use http for local desktop callback.")
+        if parsed.hostname not in ("localhost", "127.0.0.1"):
+            raise ValueError("Redirect URI host must be localhost or 127.0.0.1.")
+
+        path = parsed.path or "/callback"
+        if parsed.port:
+            return f"http://{parsed.hostname}:{parsed.port}{path}"
+
+        dynamic_port = _find_free_port(parsed.hostname)
+        return f"http://{parsed.hostname}:{dynamic_port}{path}"
 
     @staticmethod
     def _generate_code_verifier() -> str:
@@ -166,13 +189,16 @@ class MicrosoftBrowserAuth:
 
     def build_authorization_request(self) -> Dict[str, str]:
         """Build authorization URL, state, and PKCE verifier."""
+        redirect_uri = self._resolve_redirect_uri()
+        self._active_redirect_uri = redirect_uri
+
         state = secrets.token_urlsafe(32)
         code_verifier = self._generate_code_verifier()
         code_challenge = self._create_code_challenge(code_verifier)
 
         params = {
             "client_id": self.client_id,
-            "redirect_uri": self.redirect_uri,
+            "redirect_uri": redirect_uri,
             "response_type": "code",
             "response_mode": "query",
             "scope": " ".join(self.scopes),
@@ -186,13 +212,14 @@ class MicrosoftBrowserAuth:
         logger.info(
             "Built browser authorization request: tenant=%s redirect_uri=%s",
             self.tenant_id,
-            self.redirect_uri,
+            redirect_uri,
         )
         return {
             "state": state,
             "code_verifier": code_verifier,
             "code_challenge": code_challenge,
             "authorization_url": authorization_url,
+            "redirect_uri": redirect_uri,
         }
 
     def exchange_code_for_tokens(self, code: str, code_verifier: str) -> Dict:
@@ -201,7 +228,7 @@ class MicrosoftBrowserAuth:
             "client_id": self.client_id,
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": self.redirect_uri,
+            "redirect_uri": self._active_redirect_uri or self.redirect_uri,
             "code_verifier": code_verifier,
             "scope": " ".join(self.scopes),
         }
@@ -252,7 +279,7 @@ class MicrosoftBrowserAuth:
         request = authorization_request or self.build_authorization_request()
         callback_server = callback_server_class(
             expected_state=request["state"],
-            redirect_uri=self.redirect_uri,
+            redirect_uri=request["redirect_uri"],
         )
 
         if open_browser:

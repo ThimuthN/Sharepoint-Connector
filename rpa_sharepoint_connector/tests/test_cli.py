@@ -133,6 +133,7 @@ class TestConfigureCommand:
         args.profile = "test"
         args.store_dir = None
         args.force = False
+        args.redirect_uri = None
 
         with patch("rpa_sharepoint_connector.cli.TokenStore") as MockStore:
             mock_store = MagicMock()
@@ -149,6 +150,7 @@ class TestConfigureCommand:
                     "code_verifier": "verifier_abc",
                     "code_challenge": "challenge_xyz",
                     "authorization_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?state=state_123",
+                    "redirect_uri": "http://localhost:8765/callback",
                 }
                 mock_auth.authenticate.return_value = {
                     "tokens": {
@@ -175,6 +177,7 @@ class TestConfigureCommand:
         args.profile = "test"
         args.store_dir = None
         args.force = False
+        args.redirect_uri = None
 
         with patch("rpa_sharepoint_connector.cli.TokenStore") as MockStore:
             mock_store = MagicMock()
@@ -189,6 +192,7 @@ class TestConfigureCommand:
         args.profile = "test"
         args.store_dir = None
         args.force = True
+        args.redirect_uri = None
 
         with patch("rpa_sharepoint_connector.cli.TokenStore") as MockStore:
             mock_store = MagicMock()
@@ -205,6 +209,7 @@ class TestConfigureCommand:
                     "code_verifier": "verifier_abc",
                     "code_challenge": "challenge_xyz",
                     "authorization_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?state=state_123",
+                    "redirect_uri": "http://localhost:8765/callback",
                 }
                 mock_auth.authenticate.return_value = {
                     "tokens": {
@@ -227,6 +232,7 @@ class TestConfigureCommand:
         args.profile = "demo"
         args.store_dir = str(tmp_path)
         args.force = False
+        args.redirect_uri = None
 
         with patch("rpa_sharepoint_connector.cli.MicrosoftBrowserAuth") as MockAuth:
             mock_auth = MagicMock()
@@ -238,6 +244,7 @@ class TestConfigureCommand:
                 "code_verifier": "verifier_abc",
                 "code_challenge": "challenge_xyz",
                 "authorization_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?state=state_123",
+                "redirect_uri": "http://localhost:8765/callback",
             }
             mock_auth.authenticate.return_value = {
                 "tokens": {
@@ -257,3 +264,45 @@ class TestConfigureCommand:
         profile_file = Path(tmp_path) / "demo.json"
         raw = json.loads(profile_file.read_text())
         assert raw["refresh_token"] != "refresh_token_value"
+
+    def test_configure_allows_redirect_override(self):
+        args = MagicMock()
+        args.profile = "test"
+        args.store_dir = None
+        args.force = False
+        args.redirect_uri = "http://localhost:9999/custom"
+
+        with patch("rpa_sharepoint_connector.cli.TokenStore") as MockStore:
+            mock_store = MagicMock()
+            mock_store.load_profile.return_value = None
+            MockStore.return_value = mock_store
+
+            with patch("rpa_sharepoint_connector.cli.MicrosoftBrowserAuth") as MockAuth:
+                mock_auth = MagicMock()
+                MockAuth.return_value = mock_auth
+                mock_auth.tenant_id = "common"
+                mock_auth.build_authorization_request.return_value = {
+                    "state": "state_123",
+                    "code_verifier": "verifier_abc",
+                    "code_challenge": "challenge_xyz",
+                    "authorization_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?state=state_123",
+                    "redirect_uri": "http://localhost:9999/custom",
+                }
+                mock_auth.authenticate.return_value = {
+                    "tokens": {
+                        "access_token": "token_123",
+                        "refresh_token": "refresh_456",
+                        "expires_in": 3600,
+                    },
+                    "user_info": {
+                        "id": "user_id",
+                        "mail": "user@example.com",
+                    },
+                }
+
+                with patch("builtins.print"):
+                    cmd_configure(args)
+
+                MockAuth.assert_called_once_with(
+                    redirect_uri="http://localhost:9999/custom"
+                )

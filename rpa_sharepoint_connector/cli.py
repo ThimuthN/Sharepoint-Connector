@@ -58,6 +58,7 @@ def cmd_configure(args):
     profile_name = args.profile or "default"
     store_dir = args.store_dir
     force = bool(getattr(args, "force", False))
+    redirect_uri = getattr(args, "redirect_uri", None)
 
     print(f"\nConfiguring profile: {profile_name}")
     print("=" * 60)
@@ -72,14 +73,14 @@ def cmd_configure(args):
             )
             sys.exit(1)
 
-        auth = MicrosoftBrowserAuth()
+        auth = MicrosoftBrowserAuth(redirect_uri=redirect_uri)
         request = auth.build_authorization_request()
 
         print("\nMicrosoft Browser Login Required")
         print("-" * 60)
         print(f"Tenant: {auth.tenant_id}")
         print(f"Go to: {request['authorization_url']}")
-        print(f"Redirect URI: {auth.redirect_uri}")
+        print(f"Redirect URI: {request['redirect_uri']}")
         print("\nOpening browser for Microsoft sign-in...")
         print("Waiting for callback on localhost...")
         print("-" * 60)
@@ -240,6 +241,10 @@ def main():
         "--force",
         action="store_true",
         help="Replace existing profile configuration",
+    )
+    configure_parser.add_argument(
+        "--redirect-uri",
+        help="Override browser callback redirect URI (default: http://localhost/callback)",
     )
     configure_parser.set_defaults(func=cmd_configure)
 

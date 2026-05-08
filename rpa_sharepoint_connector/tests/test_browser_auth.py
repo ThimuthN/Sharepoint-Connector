@@ -44,6 +44,22 @@ class TestBrowserAuthUrl:
         ).decode("utf-8").rstrip("=")
         assert challenge == expected
 
+    def test_default_localhost_redirect_resolves_to_explicit_port(self):
+        """Default localhost redirect should resolve to an explicit callback port."""
+        auth = MicrosoftBrowserAuth(
+            client_id="client_123",
+            tenant_id="common",
+            redirect_uri="http://localhost/callback",
+        )
+
+        with patch("rpa_sharepoint_connector.browser_auth._find_free_port", return_value=54321):
+            request = auth.build_authorization_request()
+
+        parsed = urlparse(request["authorization_url"])
+        params = parse_qs(parsed.query)
+        assert request["redirect_uri"] == "http://localhost:54321/callback"
+        assert params["redirect_uri"][0] == "http://localhost:54321/callback"
+
     def test_configure_opens_browser_auth_url(self):
         """Interactive auth should open the generated authorization URL."""
         auth = MicrosoftBrowserAuth(
@@ -53,11 +69,13 @@ class TestBrowserAuthUrl:
         )
         request = auth.build_authorization_request()
         opened = []
+        callback_redirects = []
 
         class FakeCallbackServer:
             def __init__(self, expected_state, redirect_uri):
                 self.expected_state = expected_state
                 self.redirect_uri = redirect_uri
+                callback_redirects.append(redirect_uri)
                 self.closed = True
 
             def wait_for_callback(self, timeout_seconds=900):
@@ -82,6 +100,7 @@ class TestBrowserAuthUrl:
                 )
 
         assert opened == [request["authorization_url"]]
+        assert callback_redirects == [request["redirect_uri"]]
 
 
 class TestCallbackValidation:

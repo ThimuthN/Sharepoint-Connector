@@ -43,10 +43,16 @@ python -m rpa_sharepoint_connector test-upload ./sample.pdf --profile client_a
 python -m rpa_sharepoint_connector disconnect --profile client_a
 ```
 
+Optional setup override:
+
+```bash
+python -m rpa_sharepoint_connector configure --profile client_a --redirect-uri http://localhost:8765/callback
+```
+
 ## Authentication Model
 
 - OAuth 2.0 Authorization Code Flow with PKCE
-- Local callback server on `http://localhost:8765/callback`
+- Local callback server on `http://localhost/callback` (ephemeral localhost port at runtime)
 - Strict state validation on callback
 - Public-client only (no client secret)
 - Refresh token used for silent runtime token renewal
@@ -55,7 +61,7 @@ python -m rpa_sharepoint_connector disconnect --profile client_a
 
 Use one public-client app registration:
 
-- Redirect URI: `http://localhost:8765/callback`
+- Redirect URI: `http://localhost/callback`
 - Platform: public client / desktop-compatible localhost redirect
 - No client secret
 - Delegated permissions:
