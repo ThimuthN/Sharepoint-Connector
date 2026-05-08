@@ -387,6 +387,7 @@ class TestSetTargetCommand:
             "https://mysliit.sharepoint.com/:f:/r/sites/Sharepointlocation/"
             "Shared%20Documents/Folder?csf=1&web=1"
         )
+        args.my_drive = False
         args.library = None
         args.folder = None
 
@@ -441,6 +442,7 @@ class TestSetTargetCommand:
         args.profile = "missing"
         args.store_dir = None
         args.sharepoint_url = "https://mysliit.sharepoint.com/sites/Sharepointlocation"
+        args.my_drive = False
         args.library = None
         args.folder = None
 
@@ -451,3 +453,94 @@ class TestSetTargetCommand:
 
             with pytest.raises(SystemExit):
                 cmd_set_target(args)
+
+    def test_set_target_my_drive_updates_profile(self):
+        args = MagicMock()
+        args.profile = "demo"
+        args.store_dir = None
+        args.sharepoint_url = None
+        args.my_drive = True
+        args.library = None
+        args.folder = "ConnectorSmoke"
+
+        profile_data = {
+            "access_token": "access_token",
+            "refresh_token": "refresh_token",
+            "expires_at": (datetime.utcnow() + timedelta(hours=1)).isoformat(),
+            "site_id": "",
+            "site_name": "",
+            "drive_id": "",
+            "drive_name": "",
+            "folder_id": "",
+            "folder_path": "",
+            "client_id": "client_123",
+            "tenant_id": "common",
+            "user_email": "demo@outlook.com",
+        }
+
+        with patch("rpa_sharepoint_connector.cli.TokenStore") as MockStore:
+            mock_store = MagicMock()
+            mock_store.load_profile.return_value = profile_data
+            MockStore.return_value = mock_store
+
+            with patch("rpa_sharepoint_connector.cli.MicrosoftAuth") as MockAuth:
+                mock_auth = MagicMock()
+                mock_auth.is_token_expired.return_value = False
+                MockAuth.return_value = mock_auth
+
+                with patch("rpa_sharepoint_connector.cli.GraphClient") as MockGraph:
+                    mock_graph = MagicMock()
+                    mock_graph._get.return_value = {
+                        "id": "drive_abc",
+                        "name": "OneDrive",
+                    }
+                    mock_graph._ensure_folder_path.return_value = "folder_xyz"
+                    MockGraph.return_value = mock_graph
+
+                    with patch("builtins.print"):
+                        cmd_set_target(args)
+
+                    saved_profile = mock_store.save_profile.call_args[0][1]
+                    assert saved_profile["site_id"] == "me"
+                    assert saved_profile["site_name"] == "My Drive"
+                    assert saved_profile["drive_id"] == "drive_abc"
+                    assert saved_profile["drive_name"] == "OneDrive"
+                    assert saved_profile["folder_id"] == "folder_xyz"
+                    assert saved_profile["folder_path"] == "ConnectorSmoke"
+
+    def test_set_target_rejects_conflicting_target_args(self):
+        args = MagicMock()
+        args.profile = "demo"
+        args.store_dir = None
+        args.sharepoint_url = "https://mysliit.sharepoint.com/sites/Sharepointlocation"
+        args.my_drive = True
+        args.library = None
+        args.folder = None
+
+        profile_data = {
+            "access_token": "access_token",
+            "refresh_token": "refresh_token",
+            "expires_at": (datetime.utcnow() + timedelta(hours=1)).isoformat(),
+            "site_id": "",
+            "site_name": "",
+            "drive_id": "",
+            "drive_name": "",
+            "folder_id": "",
+            "folder_path": "",
+            "client_id": "client_123",
+            "tenant_id": "common",
+            "user_email": "demo@outlook.com",
+        }
+
+        with patch("rpa_sharepoint_connector.cli.TokenStore") as MockStore:
+            mock_store = MagicMock()
+            mock_store.load_profile.return_value = profile_data
+            MockStore.return_value = mock_store
+
+            with patch("rpa_sharepoint_connector.cli.MicrosoftAuth") as MockAuth:
+                mock_auth = MagicMock()
+                mock_auth.is_token_expired.return_value = False
+                MockAuth.return_value = mock_auth
+
+                with pytest.raises(SystemExit):
+                    cmd_set_target(args)

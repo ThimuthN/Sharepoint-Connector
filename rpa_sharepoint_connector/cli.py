@@ -151,6 +151,7 @@ def cmd_set_target(args):
     profile_name = args.profile or "default"
     store_dir = args.store_dir
     sharepoint_url = args.sharepoint_url
+    my_drive = bool(getattr(args, "my_drive", False))
     library_override = args.library
     folder_override = args.folder
 
@@ -166,26 +167,43 @@ def cmd_set_target(args):
 
         profile_data = _ensure_profile_token(profile_name, profile_data, store)
 
-        parsed = _parse_sharepoint_url(sharepoint_url)
-        hostname = parsed["hostname"]
-        site_path = parsed["site_path"]
-        library_name = library_override or parsed["library_name"] or "Documents"
-        folder_path = folder_override if folder_override is not None else parsed["folder_path"]
-
         graph = GraphClient(profile_data["access_token"])
-        site = graph._get(f"/sites/{hostname}:{site_path}")
-        drives = graph.list_drives(site["id"])
-        drive = _select_drive(drives, library_name)
+        if my_drive:
+            if sharepoint_url:
+                raise ValueError("Use either --my-drive or --sharepoint-url, not both.")
+            drive = graph._get("/me/drive")
+            site_id = "me"
+            site_name = "My Drive"
+            drive_name = drive.get("name") or "OneDrive"
+            folder_path = folder_override or ""
+        else:
+            if not sharepoint_url:
+                raise ValueError("Provide --sharepoint-url or use --my-drive.")
+            parsed = _parse_sharepoint_url(sharepoint_url)
+            hostname = parsed["hostname"]
+            site_path = parsed["site_path"]
+            library_name = library_override or parsed["library_name"] or "Documents"
+            folder_path = (
+                folder_override if folder_override is not None else parsed["folder_path"]
+            )
+
+            site = graph._get(f"/sites/{hostname}:{site_path}")
+            drives = graph.list_drives(site["id"])
+            drive = _select_drive(drives, library_name)
+            site_id = site["id"]
+            site_name = site.get("displayName", site_path)
+            drive_name = drive.get("name", library_name)
+
         folder_id = "root"
         if folder_path:
             folder_id = graph._ensure_folder_path(drive["id"], folder_path)
 
         profile_data.update(
             {
-                "site_id": site["id"],
-                "site_name": site.get("displayName", site_path),
+                "site_id": site_id,
+                "site_name": site_name,
                 "drive_id": drive["id"],
-                "drive_name": drive.get("name", library_name),
+                "drive_name": drive_name,
                 "folder_id": folder_id,
                 "folder_path": folder_path,
             }
@@ -444,8 +462,12 @@ def main():
     )
     target_parser.add_argument(
         "--sharepoint-url",
-        required=True,
         help="SharePoint site/library/folder URL from browser",
+    )
+    target_parser.add_argument(
+        "--my-drive",
+        action="store_true",
+        help="Use signed-in user's OneDrive as target (easy personal-account smoke test)",
     )
     target_parser.add_argument(
         "--library",
