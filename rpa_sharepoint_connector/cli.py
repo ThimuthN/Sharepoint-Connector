@@ -4,8 +4,11 @@ import json
 import logging
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.request import urlopen
 from urllib.parse import unquote, urlparse
 
 from .browser_auth import MicrosoftBrowserAuth
@@ -19,6 +22,52 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _print_actionable_error(error: Exception, command: str, profile: str = "default") -> None:
+    """Print actionable error details with targeted recovery hints."""
+    raw = str(error)
+    lower = raw.lower()
+    hints = []
+
+    if "unauthorized_client" in lower and "consumers" in lower:
+        hints.append(
+            "Azure app is not enabled for personal accounts. In App Registration set "
+            "Supported account types to 'Any Entra ID tenant + Personal Microsoft accounts', "
+            "then retry with --tenant-id common."
+        )
+    if "access_denied" in lower and command in ("configure", "setup"):
+        hints.append(
+            "Sign-in or consent was denied/cancelled. Retry and click Accept, and keep "
+            "the terminal open until callback completes."
+        )
+    if "oauth callback timed out" in lower:
+        hints.append(
+            "Open the printed Go to URL immediately and finish sign-in before timeout."
+        )
+    if "failed to start callback server" in lower or "refused to connect" in lower:
+        hints.append(
+            "Local callback failed. Close old login tabs and retry without VPN/proxy/adblock."
+        )
+    if "profile '" in lower and "not found" in lower:
+        hints.append(
+            f"Profile missing. Run setup first: "
+            f"python -m rpa_sharepoint_connector setup --profile {profile} --my-drive"
+        )
+    if "refresh token expired or invalid" in lower:
+        hints.append(
+            f"Profile needs reconnection. Run: "
+            f"python -m rpa_sharepoint_connector setup --profile {profile} --force --my-drive"
+        )
+    if "forbidden" in lower:
+        hints.append(
+            "Account lacks permission to the selected site/library/folder."
+        )
+
+    print(f"ERROR: {raw}")
+    for idx, hint in enumerate(hints, 1):
+        print(f"HINT {idx}: {hint}")
+    sys.exit(1)
 
 
 def _resolve_user_email(user_info: dict) -> str:
@@ -218,8 +267,7 @@ def cmd_set_target(args):
         print(f"Folder: {profile_data['folder_path'] or '(root)'}")
         print()
     except Exception as e:
-        print(f"ERROR: {e}")
-        sys.exit(1)
+        _print_actionable_error(e, command="set-target", profile=profile_name)
 
 
 def cmd_configure(args):
@@ -288,8 +336,7 @@ def cmd_configure(args):
         print("\n\nCancelled")
         sys.exit(0)
     except Exception as e:
-        print(f"ERROR: {e}")
-        sys.exit(1)
+        _print_actionable_error(e, command="configure", profile=profile_name)
 
 
 def cmd_status(args):
@@ -321,8 +368,7 @@ def cmd_status(args):
 
         print()
     except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        _print_actionable_error(e, command="status", profile=profile_name)
 
 
 def cmd_test_upload(args):
@@ -349,8 +395,7 @@ def cmd_test_upload(args):
         print()
 
     except Exception as e:
-        print(f"ERROR: Test failed: {e}")
-        sys.exit(1)
+        _print_actionable_error(e, command="test-upload", profile=profile_name)
 
 
 def cmd_list_profiles(args):
@@ -388,7 +433,9 @@ def cmd_disconnect(args):
 
     try:
         store = TokenStore(store_dir=store_dir)
-        confirm = input(f"Delete profile '{profile_name}'? (y/n): ").strip().lower()
+        confirm = "y" if getattr(args, "yes", False) else input(
+            f"Delete profile '{profile_name}'? (y/n): "
+        ).strip().lower()
 
         if confirm == "y":
             store.delete_profile(profile_name)
@@ -397,8 +444,7 @@ def cmd_disconnect(args):
             print("Cancelled")
 
     except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        _print_actionable_error(e, command="disconnect", profile=profile_name)
 
 
 def cmd_setup(args):
@@ -569,8 +615,116 @@ def cmd_run(args):
                 )
             )
         else:
-            print(f"ERROR: {e}")
+            _print_actionable_error(e, command="run", profile=profile_name)
         sys.exit(1)
+
+
+def cmd_doctor(args):
+    """Run preflight diagnostics for local/bot execution."""
+    profile_name = args.profile or "default"
+    store_dir = args.store_dir
+    as_json = bool(getattr(args, "json", False))
+    checks = []
+
+    try:
+        store = TokenStore(store_dir=store_dir)
+        store_path = Path(store.store_dir)
+
+        # Token store path check
+        try:
+            store_path.mkdir(parents=True, exist_ok=True)
+            probe = store_path / ".doctor_write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            checks.append({"name": "token_store_writable", "ok": True, "detail": str(store_path)})
+        except Exception as exc:
+            checks.append({"name": "token_store_writable", "ok": False, "detail": str(exc)})
+
+        # Local callback loopback check
+        class _Handler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                return
+
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+
+        try:
+            server = HTTPServer(("127.0.0.1", 0), _Handler)
+            port = server.server_port
+            t = threading.Thread(target=server.handle_request, daemon=True)
+            t.start()
+            body = urlopen(f"http://127.0.0.1:{port}", timeout=5).read().decode("utf-8")
+            server.server_close()
+            checks.append(
+                {
+                    "name": "localhost_callback",
+                    "ok": body == "ok",
+                    "detail": f"http://127.0.0.1:{port}",
+                }
+            )
+        except Exception as exc:
+            checks.append({"name": "localhost_callback", "ok": False, "detail": str(exc)})
+
+        # Profile health check
+        profile_data = store.load_profile(profile_name)
+        if profile_data:
+            missing = []
+            for field in ("client_id", "tenant_id", "refresh_token"):
+                if not profile_data.get(field):
+                    missing.append(field)
+            checks.append(
+                {
+                    "name": "profile_exists",
+                    "ok": True,
+                    "detail": profile_name,
+                }
+            )
+            checks.append(
+                {
+                    "name": "profile_required_fields",
+                    "ok": len(missing) == 0,
+                    "detail": "missing: " + ", ".join(missing) if missing else "ok",
+                }
+            )
+            checks.append(
+                {
+                    "name": "profile_target_bound",
+                    "ok": bool(profile_data.get("drive_id")),
+                    "detail": profile_data.get("drive_name") or "(unbound)",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "name": "profile_exists",
+                    "ok": False,
+                    "detail": f"{profile_name} not found",
+                }
+            )
+
+        ok_all = all(c["ok"] for c in checks)
+        output = {
+            "profile": profile_name,
+            "ok": ok_all,
+            "checks": checks,
+        }
+
+        if as_json:
+            print(json.dumps(output, indent=2))
+        else:
+            print(f"\nDoctor report for profile: {profile_name}")
+            print("=" * 60)
+            for check in checks:
+                status = "OK" if check["ok"] else "FAIL"
+                print(f"{status:5} {check['name']}: {check['detail']}")
+            print()
+
+        if not ok_all:
+            sys.exit(1)
+    except Exception as e:
+        _print_actionable_error(e, command="doctor", profile=profile_name)
 
 
 def main():
@@ -689,6 +843,19 @@ def main():
     )
     run_parser.set_defaults(func=cmd_run)
 
+    # doctor
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="Run local/profile diagnostics for setup and bot runtime",
+    )
+    doctor_parser.add_argument("--profile", "-p", help="Profile name (default: default)")
+    doctor_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print doctor report as JSON",
+    )
+    doctor_parser.set_defaults(func=cmd_doctor)
+
     # status
     status_parser = subparsers.add_parser("status", help="Show profile status")
     status_parser.add_argument(
@@ -739,6 +906,11 @@ def main():
     disconnect_parser = subparsers.add_parser("disconnect", help="Delete a profile")
     disconnect_parser.add_argument(
         "--profile", "-p", help="Profile name (default: default)"
+    )
+    disconnect_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Delete without interactive prompt (bot-safe)",
     )
     disconnect_parser.set_defaults(func=cmd_disconnect)
 
