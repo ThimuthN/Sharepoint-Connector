@@ -84,7 +84,7 @@ def main():
     except Exception as e:
         logger.error(f"   Error: {e}")
 
-    logger.info("\n✓ Bot completed!")
+    logger.info("\nBot completed.")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,0 @@
-2026-05-09 01:29:10,493 - httpx - INFO - HTTP Request: POST https://login.microsoftonline.com/common/oauth2/v2.0/devicecode "HTTP/1.1 200 OK"
-2026-05-09 01:29:10,495 - rpa_sharepoint_connector.auth - INFO - Device flow started. User code: S9MUJLJ5Q
-2026-05-09 01:29:12,140 - httpx - INFO - HTTP Request: POST https://login.microsoftonline.com/common/oauth2/v2.0/token "HTTP/1.1 400 Bad Request"

@@ -1,13 +1,13 @@
 """Setup configuration for RPA SharePoint Connector."""
 from setuptools import setup, find_packages
 
-with open("RPA_README.md", "r", encoding="utf-8") as f:
+with open("README.md", "r", encoding="utf-8") as f:
     long_description = f.read()
 
 setup(
     name="rpa-sharepoint-connector",
     version="1.0.0",
-    description="Simple Python package for RPA bots to interact with Microsoft SharePoint",
+    description="Lean Python connector for RPA bots to work with SharePoint and OneDrive",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="RPA Team",
