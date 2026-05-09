@@ -10,6 +10,7 @@ from rpa_sharepoint_connector.cli import (
     cmd_configure,
     cmd_disconnect,
     cmd_list_profiles,
+    cmd_setup,
     cmd_set_target,
     cmd_status,
     cmd_test_upload,
@@ -544,3 +545,57 @@ class TestSetTargetCommand:
 
                 with pytest.raises(SystemExit):
                     cmd_set_target(args)
+
+
+class TestSetupCommand:
+    """Test one-command setup flow."""
+
+    def test_setup_defaults_to_my_drive_and_runs_smoke(self):
+        args = MagicMock()
+        args.profile = "demo"
+        args.store_dir = None
+        args.force = False
+        args.redirect_uri = None
+        args.client_id = None
+        args.tenant_id = None
+        args.sharepoint_url = None
+        args.my_drive = False
+        args.library = None
+        args.folder = None
+        args.skip_smoke_test = False
+
+        with patch("rpa_sharepoint_connector.cli.cmd_configure") as mock_configure:
+            with patch("rpa_sharepoint_connector.cli.cmd_set_target") as mock_target:
+                with patch("rpa_sharepoint_connector.cli.cmd_test_upload") as mock_test:
+                    with patch("builtins.print"):
+                        cmd_setup(args)
+
+                    assert mock_configure.call_count == 1
+                    target_args = mock_target.call_args.args[0]
+                    assert target_args.my_drive is True
+                    assert target_args.sharepoint_url is None
+                    assert mock_test.call_count == 1
+
+    def test_setup_can_skip_smoke_test(self):
+        args = MagicMock()
+        args.profile = "demo"
+        args.store_dir = None
+        args.force = False
+        args.redirect_uri = None
+        args.client_id = None
+        args.tenant_id = None
+        args.sharepoint_url = "https://mysliit.sharepoint.com/sites/Sharepointlocation"
+        args.my_drive = False
+        args.library = None
+        args.folder = None
+        args.skip_smoke_test = True
+
+        with patch("rpa_sharepoint_connector.cli.cmd_configure") as mock_configure:
+            with patch("rpa_sharepoint_connector.cli.cmd_set_target") as mock_target:
+                with patch("rpa_sharepoint_connector.cli.cmd_test_upload") as mock_test:
+                    with patch("builtins.print"):
+                        cmd_setup(args)
+
+                    assert mock_configure.call_count == 1
+                    assert mock_target.call_count == 1
+                    assert mock_test.call_count == 0

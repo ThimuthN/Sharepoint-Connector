@@ -2,6 +2,7 @@
 import argparse
 import logging
 import sys
+import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
 from urllib.parse import unquote, urlparse
@@ -399,6 +400,80 @@ def cmd_disconnect(args):
         sys.exit(1)
 
 
+def cmd_setup(args):
+    """Run one-command onboarding: configure, bind target, and smoke test."""
+    profile_name = args.profile or "default"
+    store_dir = args.store_dir
+    force = bool(getattr(args, "force", False))
+    redirect_uri = getattr(args, "redirect_uri", None)
+    client_id = getattr(args, "client_id", None)
+    tenant_id = getattr(args, "tenant_id", None)
+    sharepoint_url = getattr(args, "sharepoint_url", None)
+    my_drive = bool(getattr(args, "my_drive", False))
+    library = getattr(args, "library", None)
+    folder = getattr(args, "folder", None)
+    skip_smoke_test = bool(getattr(args, "skip_smoke_test", False))
+
+    if not sharepoint_url and not my_drive:
+        my_drive = True
+        print("No target provided. Defaulting to --my-drive.")
+
+    print(f"\nSetup profile: {profile_name}")
+    print("=" * 60)
+    print("Step 1/3: Authenticate and save profile")
+    cmd_configure(
+        argparse.Namespace(
+            profile=profile_name,
+            store_dir=store_dir,
+            force=force,
+            redirect_uri=redirect_uri,
+            client_id=client_id,
+            tenant_id=tenant_id,
+        )
+    )
+
+    print("Step 2/3: Bind target")
+    cmd_set_target(
+        argparse.Namespace(
+            profile=profile_name,
+            store_dir=store_dir,
+            sharepoint_url=sharepoint_url,
+            my_drive=my_drive,
+            library=library,
+            folder=folder,
+        )
+    )
+
+    if not skip_smoke_test:
+        print("Step 3/3: Smoke test upload")
+        temp_file = Path(tempfile.gettempdir()) / (
+            f"rpa_setup_smoke_{int(datetime.utcnow().timestamp())}.txt"
+        )
+        temp_file.write_text(
+            f"rpa-sharepoint-connector setup smoke test {datetime.utcnow().isoformat()}\n",
+            encoding="utf-8",
+        )
+        try:
+            cmd_test_upload(
+                argparse.Namespace(
+                    profile=profile_name,
+                    store_dir=store_dir,
+                    file=str(temp_file),
+                )
+            )
+        finally:
+            try:
+                if temp_file.exists():
+                    temp_file.unlink()
+            except Exception:
+                pass
+    else:
+        print("Step 3/3: Smoke test skipped")
+
+    print("OK Setup complete")
+    print()
+
+
 def main():
     """Parse arguments and dispatch to commands."""
     parser = argparse.ArgumentParser(
@@ -436,6 +511,53 @@ def main():
         help="Override tenant endpoint (e.g., organizations, common, or tenant GUID)",
     )
     configure_parser.set_defaults(func=cmd_configure)
+
+    # setup
+    setup_parser = subparsers.add_parser(
+        "setup",
+        help="One-command setup: configure + target bind + smoke upload",
+    )
+    setup_parser.add_argument("--profile", "-p", help="Profile name (default: default)")
+    setup_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace existing profile configuration",
+    )
+    setup_parser.add_argument(
+        "--redirect-uri",
+        help="Override browser callback redirect URI (default: http://localhost/callback)",
+    )
+    setup_parser.add_argument(
+        "--client-id",
+        help="Override Microsoft public-client app ID for this profile",
+    )
+    setup_parser.add_argument(
+        "--tenant-id",
+        help="Override tenant endpoint (e.g., organizations, common, or tenant GUID)",
+    )
+    setup_parser.add_argument(
+        "--sharepoint-url",
+        help="SharePoint site/library/folder URL from browser",
+    )
+    setup_parser.add_argument(
+        "--my-drive",
+        action="store_true",
+        help="Use signed-in user's OneDrive as target",
+    )
+    setup_parser.add_argument(
+        "--library",
+        help="Override library name (defaults to URL-derived value)",
+    )
+    setup_parser.add_argument(
+        "--folder",
+        help="Override folder path inside library (defaults to URL-derived value)",
+    )
+    setup_parser.add_argument(
+        "--skip-smoke-test",
+        action="store_true",
+        help="Skip upload/delete smoke test step",
+    )
+    setup_parser.set_defaults(func=cmd_setup)
 
     # status
     status_parser = subparsers.add_parser("status", help="Show profile status")
