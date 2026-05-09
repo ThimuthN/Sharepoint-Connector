@@ -10,6 +10,7 @@ from rpa_sharepoint_connector.cli import (
     cmd_configure,
     cmd_disconnect,
     cmd_list_profiles,
+    cmd_run,
     cmd_setup,
     cmd_set_target,
     cmd_status,
@@ -599,3 +600,83 @@ class TestSetupCommand:
                     assert mock_configure.call_count == 1
                     assert mock_target.call_count == 1
                     assert mock_test.call_count == 0
+
+
+class TestRunCommand:
+    """Test run command for bot-friendly operations."""
+
+    def test_run_upload_calls_sdk_with_conflict(self):
+        args = MagicMock()
+        args.profile = "demo"
+        args.store_dir = None
+        args.op = "upload"
+        args.local_path = "local.txt"
+        args.remote_path = "Folder/local.txt"
+        args.folder_path = None
+        args.source_path = None
+        args.target_path = None
+        args.new_name = None
+        args.conflict = "rename"
+        args.json = False
+
+        with patch("rpa_sharepoint_connector.cli.SharePointClient") as MockClient:
+            mock_sp = MagicMock()
+            mock_sp.upload.return_value = "item_123"
+            MockClient.return_value = mock_sp
+
+            with patch("builtins.print") as mock_print:
+                cmd_run(args)
+
+            mock_sp.upload.assert_called_once_with(
+                "local.txt",
+                "Folder/local.txt",
+                conflict="rename",
+            )
+            output = "\n".join(str(c) for c in mock_print.call_args_list)
+            assert "successful" in output.lower()
+
+    def test_run_list_json_output(self):
+        args = MagicMock()
+        args.profile = "demo"
+        args.store_dir = None
+        args.op = "list"
+        args.local_path = None
+        args.remote_path = None
+        args.folder_path = "Inbox"
+        args.source_path = None
+        args.target_path = None
+        args.new_name = None
+        args.conflict = "overwrite"
+        args.json = True
+
+        with patch("rpa_sharepoint_connector.cli.SharePointClient") as MockClient:
+            mock_sp = MagicMock()
+            mock_sp.list.return_value = [{"name": "a.txt", "is_folder": False}]
+            MockClient.return_value = mock_sp
+
+            with patch("builtins.print") as mock_print:
+                cmd_run(args)
+
+            output = "".join(call.args[0] for call in mock_print.call_args_list)
+            payload = json.loads(output)
+            assert payload["operation"] == "list"
+            assert payload["success"] is True
+            assert payload["count"] == 1
+
+    def test_run_upload_missing_required_args_exits(self):
+        args = MagicMock()
+        args.profile = "demo"
+        args.store_dir = None
+        args.op = "upload"
+        args.local_path = None
+        args.remote_path = "Folder/a.txt"
+        args.folder_path = None
+        args.source_path = None
+        args.target_path = None
+        args.new_name = None
+        args.conflict = "overwrite"
+        args.json = False
+
+        with patch("rpa_sharepoint_connector.cli.SharePointClient"):
+            with pytest.raises(SystemExit):
+                cmd_run(args)

@@ -30,6 +30,7 @@ python -m rpa_sharepoint_connector configure --profile client_a
 python -m rpa_sharepoint_connector status --profile client_a
 python -m rpa_sharepoint_connector set-target --profile client_a --sharepoint-url "<folder-url>"
 python -m rpa_sharepoint_connector test-upload ./sample.txt --profile client_a
+python -m rpa_sharepoint_connector run --profile client_a --op upload --local-path ./a.txt --remote-path Inbox/a.txt
 python -m rpa_sharepoint_connector disconnect --profile client_a
 ```
 
@@ -52,6 +53,29 @@ sp.download("Invoices/Incoming/invoice.pdf", "invoice_local.pdf")
 sp.move("Invoices/Incoming/invoice.pdf", "Invoices/Processed")
 sp.delete("Invoices/Processed/invoice.pdf")
 items = sp.list("Invoices/Incoming")
+```
+
+## Bot Input Contract
+
+Use the `run` command for non-Python bots (UiPath, schedulers, CLI runners):
+
+```bash
+python -m rpa_sharepoint_connector run --profile client_a --op <operation> [args]
+```
+
+Operations and required args:
+- `upload`: `--local-path`, `--remote-path` (`--conflict overwrite|fail_if_exists|rename`)
+- `download`: `--remote-path`, `--local-path`
+- `list`: optional `--folder-path`
+- `delete`: `--remote-path`
+- `move`: `--source-path`, `--target-path`, optional `--new-name`
+- `mkdir`: `--folder-path`
+- `exists`: `--remote-path`
+
+For machine parsing:
+
+```bash
+python -m rpa_sharepoint_connector run --profile client_a --op list --folder-path Inbox --json
 ```
 
 ## Testing

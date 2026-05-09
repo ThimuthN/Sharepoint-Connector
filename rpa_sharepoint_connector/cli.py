@@ -1,5 +1,6 @@
 """Command-line interface for SharePoint connector."""
 import argparse
+import json
 import logging
 import sys
 import tempfile
@@ -474,6 +475,104 @@ def cmd_setup(args):
     print()
 
 
+def cmd_run(args):
+    """Run one SharePoint/OneDrive operation for automation bots."""
+    profile_name = args.profile or "default"
+    store_dir = args.store_dir
+    op = args.op
+    as_json = bool(getattr(args, "json", False))
+
+    try:
+        sp = SharePointClient(profile=profile_name, store_dir=store_dir)
+
+        if op == "upload":
+            if not args.local_path or not args.remote_path:
+                raise ValueError("upload requires --local-path and --remote-path")
+            item_id = sp.upload(args.local_path, args.remote_path, conflict=args.conflict)
+            result = {
+                "operation": "upload",
+                "success": True,
+                "item_id": item_id,
+                "remote_path": args.remote_path,
+            }
+        elif op == "download":
+            if not args.remote_path or not args.local_path:
+                raise ValueError("download requires --remote-path and --local-path")
+            sp.download(args.remote_path, args.local_path)
+            result = {"operation": "download", "success": True, "local_path": args.local_path}
+        elif op == "list":
+            folder_path = args.folder_path or ""
+            items = sp.list(folder_path)
+            result = {
+                "operation": "list",
+                "success": True,
+                "folder_path": folder_path,
+                "count": len(items),
+                "items": items,
+            }
+        elif op == "delete":
+            if not args.remote_path:
+                raise ValueError("delete requires --remote-path")
+            sp.delete(args.remote_path)
+            result = {"operation": "delete", "success": True, "remote_path": args.remote_path}
+        elif op == "move":
+            if not args.source_path or not args.target_path:
+                raise ValueError("move requires --source-path and --target-path")
+            sp.move(args.source_path, args.target_path, new_name=args.new_name)
+            result = {
+                "operation": "move",
+                "success": True,
+                "source_path": args.source_path,
+                "target_path": args.target_path,
+                "new_name": args.new_name or "",
+            }
+        elif op == "mkdir":
+            if not args.folder_path:
+                raise ValueError("mkdir requires --folder-path")
+            item_id = sp.mkdir(args.folder_path)
+            result = {
+                "operation": "mkdir",
+                "success": True,
+                "folder_path": args.folder_path,
+                "item_id": item_id,
+            }
+        elif op == "exists":
+            if not args.remote_path:
+                raise ValueError("exists requires --remote-path")
+            exists = sp.exists(args.remote_path)
+            result = {
+                "operation": "exists",
+                "success": True,
+                "remote_path": args.remote_path,
+                "exists": exists,
+            }
+        else:
+            raise ValueError(f"Unsupported operation: {op}")
+
+        if as_json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"OK {op} successful")
+            if op == "list":
+                for item in result["items"]:
+                    kind = "folder" if item.get("is_folder") else "file"
+                    print(f"- {item.get('name')} ({kind})")
+            elif op == "exists":
+                print(f"Exists: {result['exists']}")
+
+    except Exception as e:
+        if as_json:
+            print(
+                json.dumps(
+                    {"operation": op, "success": False, "error": str(e)},
+                    indent=2,
+                )
+            )
+        else:
+            print(f"ERROR: {e}")
+        sys.exit(1)
+
+
 def main():
     """Parse arguments and dispatch to commands."""
     parser = argparse.ArgumentParser(
@@ -558,6 +657,37 @@ def main():
         help="Skip upload/delete smoke test step",
     )
     setup_parser.set_defaults(func=cmd_setup)
+
+    # run
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run a single operation (upload/download/list/delete/move/mkdir/exists)",
+    )
+    run_parser.add_argument("--profile", "-p", help="Profile name (default: default)")
+    run_parser.add_argument(
+        "--op",
+        required=True,
+        choices=["upload", "download", "list", "delete", "move", "mkdir", "exists"],
+        help="Operation to run",
+    )
+    run_parser.add_argument("--local-path", help="Local file path for upload/download")
+    run_parser.add_argument("--remote-path", help="Remote SharePoint/OneDrive path")
+    run_parser.add_argument("--folder-path", help="Folder path for list/mkdir")
+    run_parser.add_argument("--source-path", help="Source path for move")
+    run_parser.add_argument("--target-path", help="Target folder path for move")
+    run_parser.add_argument("--new-name", help="Optional new name for move")
+    run_parser.add_argument(
+        "--conflict",
+        choices=["overwrite", "fail_if_exists", "rename"],
+        default="overwrite",
+        help="Upload conflict behavior (default: overwrite)",
+    )
+    run_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print result as JSON for bot parsing",
+    )
+    run_parser.set_defaults(func=cmd_run)
 
     # status
     status_parser = subparsers.add_parser("status", help="Show profile status")
