@@ -215,8 +215,19 @@ class SharePointClient:
             for folder_name in parts:
                 if not folder_name:
                     continue
-                result = self.graph.create_folder(self.drive_id, parent_id, folder_name)
-                parent_id = result["id"]
+                # Reuse existing folder if present; only create missing segments.
+                items = self.graph.list_items(self.drive_id, parent_id)
+                existing = None
+                for item in items:
+                    if item.get("name") == folder_name and "folder" in item:
+                        existing = item
+                        break
+
+                if existing:
+                    parent_id = existing["id"]
+                else:
+                    result = self.graph.create_folder(self.drive_id, parent_id, folder_name)
+                    parent_id = result["id"]
 
             logger.info(f"Created folder: {folder_path}")
             return parent_id

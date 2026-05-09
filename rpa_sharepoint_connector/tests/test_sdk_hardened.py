@@ -303,6 +303,28 @@ class TestSDKPathHandling:
                 with pytest.raises(ValueError, match="not found"):
                     sp._find_item_id("Folder/Missing/file.pdf")
 
+    def test_mkdir_reuses_existing_path_segments(self, mock_profile):
+        """mkdir should reuse existing folders instead of creating renamed duplicates."""
+        with patch('rpa_sharepoint_connector.sdk.TokenStore') as MockStore:
+            mock_store = MagicMock()
+            mock_store.load_profile.return_value = mock_profile
+            MockStore.return_value = mock_store
+
+            with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
+                mock_graph = MagicMock()
+                # Existing root contains ConnectorSmoke; ConnectorSmoke contains Processed.
+                mock_graph.list_items.side_effect = [
+                    [{"id": "connector_id", "name": "ConnectorSmoke", "folder": {}}],
+                    [{"id": "processed_id", "name": "Processed", "folder": {}}],
+                ]
+                MockGraph.return_value = mock_graph
+
+                sp = SharePointClient(profile="test")
+                result_id = sp.mkdir("ConnectorSmoke/Processed")
+
+                assert result_id == "processed_id"
+                mock_graph.create_folder.assert_not_called()
+
 
 class TestSDKTokenRefreshDeterministic:
     """Test token refresh is deterministic."""

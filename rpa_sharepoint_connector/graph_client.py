@@ -149,6 +149,7 @@ class GraphClient:
                 response = client.get(
                     url,
                     headers={"Authorization": f"Bearer {self.access_token}"},
+                    follow_redirects=True,
                 )
                 response.raise_for_status()
                 return response.content

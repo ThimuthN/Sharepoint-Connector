@@ -130,6 +130,9 @@ class TestGraphClientDownload:
             content = client.download_file("drive_1", "file_123")
             assert content == b"file content"
 
+            call_args = mock_client.return_value.__enter__.return_value.get.call_args
+            assert call_args[1]["follow_redirects"] is True
+
 
 class TestGraphClientDelete:
     """Test item deletion."""
