@@ -12,6 +12,12 @@ Lean Python connector for bot workflows:
 pip install -e .
 ```
 
+For local development and tests:
+
+```bash
+pip install -e .[dev]
+```
+
 ## Required Azure App Settings
 
 - App type: public client (no client secret)

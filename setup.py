@@ -17,6 +17,11 @@ setup(
         "httpx>=0.25.0",
         "cryptography>=41.0.0",
     ],
+    extras_require={
+        "dev": [
+            "pytest>=7.0.0",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "sharepoint-connector=rpa_sharepoint_connector.cli:main",

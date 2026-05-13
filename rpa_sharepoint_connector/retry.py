@@ -196,7 +196,8 @@ def retry_operation(
             f"{config.max_attempts} attempts failed, last status={last_status_code}"
         )
         raise ValueError(
-            f"Operation failed after {config.max_attempts} retries: {operation_name}"
+            f"Operation failed after {config.max_attempts} retries: "
+            f"{operation_name}. Last error: {last_exception}"
         ) from last_exception
 
     raise ValueError(f"Unexpected error in retry logic for {operation_name}")

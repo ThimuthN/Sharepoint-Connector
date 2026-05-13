@@ -680,3 +680,57 @@ class TestRunCommand:
         with patch("rpa_sharepoint_connector.cli.SharePointClient"):
             with pytest.raises(SystemExit):
                 cmd_run(args)
+
+    def test_run_json_failure_includes_error_code_and_retryable(self):
+        args = MagicMock()
+        args.profile = "demo"
+        args.store_dir = None
+        args.op = "upload"
+        args.local_path = None
+        args.remote_path = "Folder/a.txt"
+        args.folder_path = None
+        args.source_path = None
+        args.target_path = None
+        args.new_name = None
+        args.conflict = "overwrite"
+        args.json = True
+
+        with patch("rpa_sharepoint_connector.cli.SharePointClient"):
+            with patch("builtins.print") as mock_print:
+                with pytest.raises(SystemExit):
+                    cmd_run(args)
+
+            output = "".join(call.args[0] for call in mock_print.call_args_list)
+            payload = json.loads(output)
+            assert payload["success"] is False
+            assert payload["error_code"] == "INVALID_INPUT"
+            assert payload["retryable"] is False
+
+    def test_run_json_rate_limit_is_retryable(self):
+        args = MagicMock()
+        args.profile = "demo"
+        args.store_dir = None
+        args.op = "list"
+        args.local_path = None
+        args.remote_path = None
+        args.folder_path = "Inbox"
+        args.source_path = None
+        args.target_path = None
+        args.new_name = None
+        args.conflict = "overwrite"
+        args.json = True
+
+        with patch("rpa_sharepoint_connector.cli.SharePointClient") as MockClient:
+            mock_sp = MagicMock()
+            mock_sp.list.side_effect = ValueError("Rate limited. Try again later.")
+            MockClient.return_value = mock_sp
+
+            with patch("builtins.print") as mock_print:
+                with pytest.raises(SystemExit):
+                    cmd_run(args)
+
+            output = "".join(call.args[0] for call in mock_print.call_args_list)
+            payload = json.loads(output)
+            assert payload["success"] is False
+            assert payload["error_code"] == "RATE_LIMITED"
+            assert payload["retryable"] is True

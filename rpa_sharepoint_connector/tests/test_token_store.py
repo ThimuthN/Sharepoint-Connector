@@ -120,6 +120,25 @@ class TestProfileSaveAndLoad:
             with pytest.raises(ValueError, match="Failed to load profile"):
                 store.load_profile("broken")
 
+    def test_rejects_path_traversal_profile_names(self):
+        """Profile names must not escape the token store directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = TokenStore(store_dir=tmpdir)
+
+            with pytest.raises(ValueError, match="invalid path characters|Invalid profile name"):
+                store.save_profile("../outside", {"data": "value"})
+
+            with pytest.raises(ValueError, match="invalid path characters|Invalid profile name"):
+                store.load_profile("..\\outside")
+
+    def test_rejects_hidden_profile_names(self):
+        """Hidden/dot-prefixed names should be rejected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = TokenStore(store_dir=tmpdir)
+
+            with pytest.raises(ValueError, match="cannot start with"):
+                store.save_profile(".hidden", {"data": "value"})
+
 
 class TestProfileDeletion:
     """Test profile deletion."""

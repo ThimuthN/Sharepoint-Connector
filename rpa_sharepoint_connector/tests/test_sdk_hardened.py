@@ -62,6 +62,22 @@ class TestSDKHealthCheck:
                     sp = SharePointClient(profile="test")
                     # Should auto-refresh since we have short expiry in test
 
+    def test_close_delegates_to_graph_client(self, mock_profile):
+        """SDK close should release the shared Graph HTTP client."""
+        with patch('rpa_sharepoint_connector.sdk.TokenStore') as MockStore:
+            mock_store = MagicMock()
+            mock_store.load_profile.return_value = mock_profile
+            MockStore.return_value = mock_store
+
+            with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
+                mock_graph = MagicMock()
+                MockGraph.return_value = mock_graph
+
+                sp = SharePointClient(profile="test")
+                sp.close()
+
+                mock_graph.close.assert_called_once()
+
 
 class TestSDKDangerousOperations:
     """Test prevention of dangerous operations."""
@@ -105,8 +121,7 @@ class TestSDKDangerousOperations:
 
             with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
                 mock_graph = MagicMock()
-                # Empty result means file not found
-                mock_graph.list_items.return_value = []
+                mock_graph.get_item_by_path.side_effect = ValueError("Path not found: NonExistent/File.pdf")
                 MockGraph.return_value = mock_graph
 
                 sp = SharePointClient(profile="test")
@@ -176,13 +191,34 @@ class TestSDKErrorMessages:
 
             with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
                 mock_graph = MagicMock()
-                mock_graph.list_items.return_value = []
+                mock_graph.get_item_by_path.side_effect = ValueError("Path not found: Nonexistent/File.pdf")
                 MockGraph.return_value = mock_graph
 
                 sp = SharePointClient(profile="test")
 
                 with pytest.raises(ValueError):
                     sp.download("Nonexistent/File.pdf", "local.pdf")
+
+    def test_download_streams_to_path(self, mock_profile):
+        """SDK downloads should stream directly to a target path via GraphClient."""
+        with patch('rpa_sharepoint_connector.sdk.TokenStore') as MockStore:
+            mock_store = MagicMock()
+            mock_store.load_profile.return_value = mock_profile
+            MockStore.return_value = mock_store
+
+            with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
+                mock_graph = MagicMock()
+                mock_graph.get_item_by_path.return_value = {"id": "file_1", "name": "report.pdf"}
+                MockGraph.return_value = mock_graph
+
+                sp = SharePointClient(profile="test")
+                sp.download("Invoices/report.pdf", "local.pdf")
+
+                mock_graph.download_file_to_path.assert_called_once_with(
+                    "drive_1",
+                    "file_1",
+                    "local.pdf",
+                )
 
 
 class TestSDKRuntimeStability:
@@ -222,7 +258,7 @@ class TestSDKRuntimeStability:
 
             with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
                 mock_graph = MagicMock()
-                mock_graph.list_items.return_value = []  # File not found
+                mock_graph.get_item_by_path.side_effect = ValueError("Path not found: NonExistent/file.pdf")
                 MockGraph.return_value = mock_graph
 
                 sp = SharePointClient(profile="test")
@@ -275,16 +311,16 @@ class TestSDKPathHandling:
             with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
                 mock_graph = MagicMock()
                 # Mock hierarchy: Folder -> SubFolder -> file.pdf
-                mock_graph.list_items.side_effect = [
-                    [{"id": "sub_1", "name": "Folder"}],
-                    [{"id": "sub_2", "name": "SubFolder"}],
-                    [{"id": "file_1", "name": "file.pdf"}]
-                ]
+                mock_graph.get_item_by_path.return_value = {"id": "file_1", "name": "file.pdf"}
                 MockGraph.return_value = mock_graph
 
                 sp = SharePointClient(profile="test")
                 item_id = sp._find_item_id("Folder/SubFolder/file.pdf")
                 assert item_id == "file_1"
+                mock_graph.get_item_by_path.assert_called_once_with(
+                    "drive_1",
+                    "Invoices/Folder/SubFolder/file.pdf",
+                )
 
     def test_find_item_id_missing_path(self, mock_profile):
         """Test finding item with missing path component."""
@@ -295,7 +331,7 @@ class TestSDKPathHandling:
 
             with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
                 mock_graph = MagicMock()
-                mock_graph.list_items.return_value = [{"id": "sub_1", "name": "Folder"}]
+                mock_graph.get_item_by_path.side_effect = ValueError("Path not found: Folder/Missing/file.pdf")
                 MockGraph.return_value = mock_graph
 
                 sp = SharePointClient(profile="test")
@@ -312,18 +348,63 @@ class TestSDKPathHandling:
 
             with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
                 mock_graph = MagicMock()
-                # Existing root contains ConnectorSmoke; ConnectorSmoke contains Processed.
-                mock_graph.list_items.side_effect = [
-                    [{"id": "connector_id", "name": "ConnectorSmoke", "folder": {}}],
-                    [{"id": "processed_id", "name": "Processed", "folder": {}}],
-                ]
+                mock_graph._ensure_folder_path.return_value = "processed_id"
                 MockGraph.return_value = mock_graph
 
                 sp = SharePointClient(profile="test")
                 result_id = sp.mkdir("ConnectorSmoke/Processed")
 
                 assert result_id == "processed_id"
-                mock_graph.create_folder.assert_not_called()
+                mock_graph._ensure_folder_path.assert_called_once_with(
+                    "drive_1",
+                    "Invoices/ConnectorSmoke/Processed",
+                )
+
+    def test_single_segment_filename_resolves_as_path(self, mock_profile):
+        """Single-segment values should resolve as path before falling back to ID."""
+        with patch('rpa_sharepoint_connector.sdk.TokenStore') as MockStore:
+            mock_store = MagicMock()
+            mock_store.load_profile.return_value = mock_profile
+            MockStore.return_value = mock_store
+
+            with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
+                mock_graph = MagicMock()
+                mock_graph.get_item_by_path.return_value = {
+                    "id": "file_123",
+                    "name": "report.pdf",
+                    "file": {},
+                }
+                mock_graph.item_exists.return_value = True
+                MockGraph.return_value = mock_graph
+
+                sp = SharePointClient(profile="test")
+                exists = sp.exists("report.pdf")
+
+                assert exists is True
+                mock_graph.get_item_by_path.assert_called_once_with(
+                    "drive_1",
+                    "Invoices/report.pdf",
+                )
+                mock_graph.item_exists.assert_called_once_with("drive_1", "file_123")
+
+    def test_explicit_id_prefix_bypasses_path_lookup(self, mock_profile):
+        """id:<value> should bypass path lookup and be treated as explicit ID."""
+        with patch('rpa_sharepoint_connector.sdk.TokenStore') as MockStore:
+            mock_store = MagicMock()
+            mock_store.load_profile.return_value = mock_profile
+            MockStore.return_value = mock_store
+
+            with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
+                mock_graph = MagicMock()
+                mock_graph.item_exists.return_value = True
+                MockGraph.return_value = mock_graph
+
+                sp = SharePointClient(profile="test")
+                exists = sp.exists("id:item_abc")
+
+                assert exists is True
+                mock_graph.get_item_by_path.assert_not_called()
+                mock_graph.item_exists.assert_called_once_with("drive_1", "item_abc")
 
 
 class TestSDKTokenRefreshDeterministic:

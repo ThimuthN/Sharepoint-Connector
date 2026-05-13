@@ -1,18 +1,30 @@
 """Command-line interface for SharePoint connector."""
 import argparse
-import json
 import logging
 import sys
-import tempfile
-import threading
 from pathlib import Path
-from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.request import urlopen
-from urllib.parse import unquote, urlparse
+from datetime import datetime
 
 from .browser_auth import MicrosoftBrowserAuth
 from .auth import MicrosoftAuth
+from .cli_doctor import cmd_doctor as _cmd_doctor
+from .cli_output import (
+    classify_error_for_json,
+    print_actionable_error,
+    print_run_result,
+)
+from .cli_run import cmd_run as _cmd_run
+from .cli_setup import (
+    cmd_configure as _cmd_configure,
+    cmd_set_target as _cmd_set_target,
+    cmd_setup as _cmd_setup,
+    ensure_profile_token,
+    normalize_name,
+    parse_sharepoint_url,
+    resolve_user_email,
+    save_profile,
+    select_drive,
+)
 from .graph_client import GraphClient
 from .token_store import TokenStore
 from .sdk import SharePointClient
@@ -24,59 +36,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _unlink_if_exists(path: Path) -> None:
+    """Remove a file if present, without relying on Python 3.8+ APIs."""
+    try:
+        if path.exists():
+            path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def _classify_error_for_json(error: Exception) -> dict:
+    """Backwards-compatible wrapper for JSON error classification."""
+    return classify_error_for_json(error)
+
+
 def _print_actionable_error(error: Exception, command: str, profile: str = "default") -> None:
-    """Print actionable error details with targeted recovery hints."""
-    raw = str(error)
-    lower = raw.lower()
-    hints = []
+    """Backwards-compatible wrapper for CLI error printing."""
+    print_actionable_error(error, command=command, profile=profile)
 
-    if "unauthorized_client" in lower and "consumers" in lower:
-        hints.append(
-            "Azure app is not enabled for personal accounts. In App Registration set "
-            "Supported account types to 'Any Entra ID tenant + Personal Microsoft accounts', "
-            "then retry with --tenant-id common."
-        )
-    if "access_denied" in lower and command in ("configure", "setup"):
-        hints.append(
-            "Sign-in or consent was denied/cancelled. Retry and click Accept, and keep "
-            "the terminal open until callback completes."
-        )
-    if "oauth callback timed out" in lower:
-        hints.append(
-            "Open the printed Go to URL immediately and finish sign-in before timeout."
-        )
-    if "failed to start callback server" in lower or "refused to connect" in lower:
-        hints.append(
-            "Local callback failed. Close old login tabs and retry without VPN/proxy/adblock."
-        )
-    if "profile '" in lower and "not found" in lower:
-        hints.append(
-            f"Profile missing. Run setup first: "
-            f"python -m rpa_sharepoint_connector setup --profile {profile} --my-drive"
-        )
-    if "refresh token expired or invalid" in lower:
-        hints.append(
-            f"Profile needs reconnection. Run: "
-            f"python -m rpa_sharepoint_connector setup --profile {profile} --force --my-drive"
-        )
-    if "forbidden" in lower:
-        hints.append(
-            "Account lacks permission to the selected site/library/folder."
-        )
 
-    print(f"ERROR: {raw}")
-    for idx, hint in enumerate(hints, 1):
-        print(f"HINT {idx}: {hint}")
-    sys.exit(1)
+def _print_run_result(result: dict) -> None:
+    """Backwards-compatible wrapper for run result formatting."""
+    print_run_result(result)
 
 
 def _resolve_user_email(user_info: dict) -> str:
     """Resolve best available user email identifier from Graph /me payload."""
-    return (
-        user_info.get("mail")
-        or user_info.get("userPrincipalName")
-        or "unknown"
-    )
+    return resolve_user_email(user_info)
 
 
 def _save_profile(
@@ -88,89 +74,30 @@ def _save_profile(
     tenant_id: str,
 ) -> str:
     """Persist token/user data in the standard profile format."""
-    store = TokenStore(store_dir=store_dir)
-    user_email = _resolve_user_email(user_info)
-    profile_data = {
-        "access_token": tokens["access_token"],
-        "refresh_token": tokens.get("refresh_token", ""),
-        "expires_at": (
-            datetime.utcnow() + timedelta(seconds=tokens.get("expires_in", 3600))
-        ).isoformat(),
-        "site_id": "",
-        "site_name": "",
-        "drive_id": "",
-        "drive_name": "",
-        "folder_id": "",
-        "folder_path": "",
-        "user_id": user_info.get("id", ""),
-        "user_email": user_email,
-        "client_id": client_id,
-        "tenant_id": tenant_id,
-    }
-    store.save_profile(profile_name, profile_data)
-    return user_email
+    return save_profile(
+        profile_name=profile_name,
+        store_dir=store_dir,
+        tokens=tokens,
+        user_info=user_info,
+        client_id=client_id,
+        tenant_id=tenant_id,
+        token_store_cls=TokenStore,
+    )
 
 
 def _normalize_name(value: str) -> str:
     """Normalize text for case/spacing-insensitive matching."""
-    return "".join(ch.lower() for ch in value if ch.isalnum())
+    return normalize_name(value)
 
 
 def _parse_sharepoint_url(sharepoint_url: str) -> dict:
     """Parse a SharePoint browser URL into host/site/library/folder hints."""
-    parsed = urlparse(sharepoint_url)
-    if not parsed.scheme.startswith("http") or not parsed.hostname:
-        raise ValueError("Invalid SharePoint URL.")
-
-    decoded_path = unquote(parsed.path or "")
-    for marker in ("/:f:/r", "/:u:/r", "/:x:/r", "/:w:/r", "/:b:/r"):
-        if marker in decoded_path:
-            decoded_path = decoded_path.split(marker, 1)[1]
-            break
-
-    if not decoded_path.startswith("/"):
-        decoded_path = "/" + decoded_path
-
-    segments = [seg for seg in decoded_path.split("/") if seg]
-    if len(segments) < 2 or segments[0] not in ("sites", "teams"):
-        raise ValueError(
-            "Could not parse site path from URL. Expected /sites/<name> or /teams/<name>."
-        )
-
-    site_path = f"/{segments[0]}/{segments[1]}"
-    library_name = segments[2] if len(segments) >= 3 else "Documents"
-    folder_path = "/".join(segments[3:]) if len(segments) >= 4 else ""
-
-    return {
-        "hostname": parsed.hostname,
-        "site_path": site_path,
-        "library_name": library_name,
-        "folder_path": folder_path,
-    }
+    return parse_sharepoint_url(sharepoint_url)
 
 
 def _select_drive(drives: list, requested_library: str) -> dict:
     """Select best matching document library drive."""
-    requested = _normalize_name(requested_library)
-    aliases = {requested}
-    if requested == "shareddocuments":
-        aliases.add("documents")
-    if requested == "documents":
-        aliases.add("shareddocuments")
-
-    for drive in drives:
-        candidates = {_normalize_name(drive.get("name", ""))}
-        web_url = drive.get("webUrl", "")
-        if web_url:
-            tail = unquote(urlparse(web_url).path.split("/")[-1])
-            candidates.add(_normalize_name(tail))
-        if aliases.intersection(candidates):
-            return drive
-
-    raise ValueError(
-        f"Library '{requested_library}' not found. Available libraries: "
-        f"{', '.join(d.get('name', '<unknown>') for d in drives)}"
-    )
+    return select_drive(drives, requested_library)
 
 
 def _ensure_profile_token(
@@ -179,164 +106,37 @@ def _ensure_profile_token(
     store: TokenStore,
 ) -> dict:
     """Refresh profile access token if required and persist updates."""
-    expires_at = datetime.fromisoformat(profile_data["expires_at"])
-    auth = MicrosoftAuth(
-        client_id=profile_data.get("client_id"),
-        tenant_id=profile_data.get("tenant_id"),
+    return ensure_profile_token(
+        profile_name=profile_name,
+        profile_data=profile_data,
+        store=store,
+        auth_cls=MicrosoftAuth,
     )
-    if auth.is_token_expired(expires_at):
-        token_response = auth.refresh_token(profile_data["refresh_token"])
-        profile_data["access_token"] = token_response["access_token"]
-        profile_data["refresh_token"] = token_response.get(
-            "refresh_token", profile_data["refresh_token"]
-        )
-        profile_data["expires_at"] = (
-            datetime.utcnow() + timedelta(seconds=token_response.get("expires_in", 3600))
-        ).isoformat()
-        store.save_profile(profile_name, profile_data)
-    return profile_data
 
 
 def cmd_set_target(args):
     """Bind configured profile to a SharePoint site/library/folder target."""
-    profile_name = args.profile or "default"
-    store_dir = args.store_dir
-    sharepoint_url = args.sharepoint_url
-    my_drive = bool(getattr(args, "my_drive", False))
-    library_override = args.library
-    folder_override = args.folder
-
-    try:
-        store = TokenStore(store_dir=store_dir)
-        profile_data = store.load_profile(profile_name)
-        if not profile_data:
-            print(
-                f"Profile '{profile_name}' not found. "
-                f"Run: python -m rpa_sharepoint_connector configure --profile {profile_name}"
-            )
-            sys.exit(1)
-
-        profile_data = _ensure_profile_token(profile_name, profile_data, store)
-
-        graph = GraphClient(profile_data["access_token"])
-        if my_drive:
-            if sharepoint_url:
-                raise ValueError("Use either --my-drive or --sharepoint-url, not both.")
-            drive = graph._get("/me/drive")
-            site_id = "me"
-            site_name = "My Drive"
-            drive_name = drive.get("name") or "OneDrive"
-            folder_path = folder_override or ""
-        else:
-            if not sharepoint_url:
-                raise ValueError("Provide --sharepoint-url or use --my-drive.")
-            parsed = _parse_sharepoint_url(sharepoint_url)
-            hostname = parsed["hostname"]
-            site_path = parsed["site_path"]
-            library_name = library_override or parsed["library_name"] or "Documents"
-            folder_path = (
-                folder_override if folder_override is not None else parsed["folder_path"]
-            )
-
-            site = graph._get(f"/sites/{hostname}:{site_path}")
-            drives = graph.list_drives(site["id"])
-            drive = _select_drive(drives, library_name)
-            site_id = site["id"]
-            site_name = site.get("displayName", site_path)
-            drive_name = drive.get("name", library_name)
-
-        folder_id = "root"
-        if folder_path:
-            folder_id = graph._ensure_folder_path(drive["id"], folder_path)
-
-        profile_data.update(
-            {
-                "site_id": site_id,
-                "site_name": site_name,
-                "drive_id": drive["id"],
-                "drive_name": drive_name,
-                "folder_id": folder_id,
-                "folder_path": folder_path,
-            }
-        )
-        store.save_profile(profile_name, profile_data)
-
-        print(f"OK Target configured for profile '{profile_name}'")
-        print(f"Site: {profile_data['site_name']}")
-        print(f"Library: {profile_data['drive_name']}")
-        print(f"Folder: {profile_data['folder_path'] or '(root)'}")
-        print()
-    except Exception as e:
-        _print_actionable_error(e, command="set-target", profile=profile_name)
+    _cmd_set_target(
+        args,
+        token_store_cls=TokenStore,
+        graph_client_cls=GraphClient,
+        auth_cls=MicrosoftAuth,
+        parse_sharepoint_url_fn=_parse_sharepoint_url,
+        select_drive_fn=_select_drive,
+        ensure_profile_token_fn=_ensure_profile_token,
+        print_actionable_error=_print_actionable_error,
+    )
 
 
 def cmd_configure(args):
     """Configure a new profile using browser OAuth (Authorization Code + PKCE)."""
-    profile_name = args.profile or "default"
-    store_dir = args.store_dir
-    force = bool(getattr(args, "force", False))
-    redirect_uri = getattr(args, "redirect_uri", None)
-    client_id = getattr(args, "client_id", None)
-    tenant_id = getattr(args, "tenant_id", None)
-
-    print(f"\nConfiguring profile: {profile_name}")
-    print("=" * 60)
-
-    try:
-        store = TokenStore(store_dir=store_dir)
-        existing_profile = store.load_profile(profile_name)
-        if existing_profile and not force:
-            print(
-                f"ERROR: Profile '{profile_name}' already exists. "
-                f"Run configure again with --force to replace it."
-            )
-            sys.exit(1)
-
-        auth = MicrosoftBrowserAuth(
-            client_id=client_id,
-            tenant_id=tenant_id,
-            redirect_uri=redirect_uri,
-        )
-        request = auth.build_authorization_request()
-
-        print("\nMicrosoft Browser Login Required")
-        print("-" * 60)
-        print(f"Client ID: {auth.client_id}")
-        print(f"Tenant: {auth.tenant_id}")
-        print(f"Go to: {request['authorization_url']}")
-        print(f"Redirect URI: {request['redirect_uri']}")
-        print("\nOpening browser for Microsoft sign-in...")
-        print("Waiting for callback on localhost...")
-        print("-" * 60)
-
-        result = auth.authenticate(
-            open_browser=True,
-            authorization_request=request,
-        )
-        tokens = result["tokens"]
-        user_info = result["user_info"]
-
-        print("OK Authorization successful!")
-
-        user_email = _resolve_user_email(user_info)
-        print(f"OK Logged in as: {user_email}")
-
-        _save_profile(
-            profile_name=profile_name,
-            store_dir=store_dir,
-            tokens=tokens,
-            user_info=user_info,
-            client_id=auth.client_id,
-            tenant_id=auth.tenant_id,
-        )
-        print(f"OK Profile '{profile_name}' saved")
-        print()
-
-    except KeyboardInterrupt:
-        print("\n\nCancelled")
-        sys.exit(0)
-    except Exception as e:
-        _print_actionable_error(e, command="configure", profile=profile_name)
+    _cmd_configure(
+        args,
+        token_store_cls=TokenStore,
+        browser_auth_cls=MicrosoftBrowserAuth,
+        save_profile_fn=_save_profile,
+        print_actionable_error=_print_actionable_error,
+    )
 
 
 def cmd_status(args):
@@ -417,7 +217,7 @@ def cmd_list_profiles(args):
                 profile_data = store.load_profile(profile_name)
                 email = profile_data.get("user_email", "unknown")
                 print(f"  {profile_name:20} - {email}")
-            except:
+            except Exception:
                 print(f"  {profile_name:20} - (error reading)")
 
         print()
@@ -449,282 +249,33 @@ def cmd_disconnect(args):
 
 def cmd_setup(args):
     """Run one-command onboarding: configure, bind target, and smoke test."""
-    profile_name = args.profile or "default"
-    store_dir = args.store_dir
-    force = bool(getattr(args, "force", False))
-    redirect_uri = getattr(args, "redirect_uri", None)
-    client_id = getattr(args, "client_id", None)
-    tenant_id = getattr(args, "tenant_id", None)
-    sharepoint_url = getattr(args, "sharepoint_url", None)
-    my_drive = bool(getattr(args, "my_drive", False))
-    library = getattr(args, "library", None)
-    folder = getattr(args, "folder", None)
-    skip_smoke_test = bool(getattr(args, "skip_smoke_test", False))
-
-    if not sharepoint_url and not my_drive:
-        my_drive = True
-        print("No target provided. Defaulting to --my-drive.")
-
-    print(f"\nSetup profile: {profile_name}")
-    print("=" * 60)
-    print("Step 1/3: Authenticate and save profile")
-    cmd_configure(
-        argparse.Namespace(
-            profile=profile_name,
-            store_dir=store_dir,
-            force=force,
-            redirect_uri=redirect_uri,
-            client_id=client_id,
-            tenant_id=tenant_id,
-        )
+    _cmd_setup(
+        args,
+        configure_cmd=cmd_configure,
+        set_target_cmd=cmd_set_target,
+        test_upload_cmd=cmd_test_upload,
+        unlink_if_exists=_unlink_if_exists,
     )
-
-    print("Step 2/3: Bind target")
-    cmd_set_target(
-        argparse.Namespace(
-            profile=profile_name,
-            store_dir=store_dir,
-            sharepoint_url=sharepoint_url,
-            my_drive=my_drive,
-            library=library,
-            folder=folder,
-        )
-    )
-
-    if not skip_smoke_test:
-        print("Step 3/3: Smoke test upload")
-        temp_file = Path(tempfile.gettempdir()) / (
-            f"rpa_setup_smoke_{int(datetime.utcnow().timestamp())}.txt"
-        )
-        temp_file.write_text(
-            f"rpa-sharepoint-connector setup smoke test {datetime.utcnow().isoformat()}\n",
-            encoding="utf-8",
-        )
-        try:
-            cmd_test_upload(
-                argparse.Namespace(
-                    profile=profile_name,
-                    store_dir=store_dir,
-                    file=str(temp_file),
-                )
-            )
-        finally:
-            try:
-                if temp_file.exists():
-                    temp_file.unlink()
-            except Exception:
-                pass
-    else:
-        print("Step 3/3: Smoke test skipped")
-
-    print("OK Setup complete")
-    print()
 
 
 def cmd_run(args):
     """Run one SharePoint/OneDrive operation for automation bots."""
-    profile_name = args.profile or "default"
-    store_dir = args.store_dir
-    op = args.op
-    as_json = bool(getattr(args, "json", False))
-
-    try:
-        sp = SharePointClient(profile=profile_name, store_dir=store_dir)
-
-        if op == "upload":
-            if not args.local_path or not args.remote_path:
-                raise ValueError("upload requires --local-path and --remote-path")
-            item_id = sp.upload(args.local_path, args.remote_path, conflict=args.conflict)
-            result = {
-                "operation": "upload",
-                "success": True,
-                "item_id": item_id,
-                "remote_path": args.remote_path,
-            }
-        elif op == "download":
-            if not args.remote_path or not args.local_path:
-                raise ValueError("download requires --remote-path and --local-path")
-            sp.download(args.remote_path, args.local_path)
-            result = {"operation": "download", "success": True, "local_path": args.local_path}
-        elif op == "list":
-            folder_path = args.folder_path or ""
-            items = sp.list(folder_path)
-            result = {
-                "operation": "list",
-                "success": True,
-                "folder_path": folder_path,
-                "count": len(items),
-                "items": items,
-            }
-        elif op == "delete":
-            if not args.remote_path:
-                raise ValueError("delete requires --remote-path")
-            sp.delete(args.remote_path)
-            result = {"operation": "delete", "success": True, "remote_path": args.remote_path}
-        elif op == "move":
-            if not args.source_path or not args.target_path:
-                raise ValueError("move requires --source-path and --target-path")
-            sp.move(args.source_path, args.target_path, new_name=args.new_name)
-            result = {
-                "operation": "move",
-                "success": True,
-                "source_path": args.source_path,
-                "target_path": args.target_path,
-                "new_name": args.new_name or "",
-            }
-        elif op == "mkdir":
-            if not args.folder_path:
-                raise ValueError("mkdir requires --folder-path")
-            item_id = sp.mkdir(args.folder_path)
-            result = {
-                "operation": "mkdir",
-                "success": True,
-                "folder_path": args.folder_path,
-                "item_id": item_id,
-            }
-        elif op == "exists":
-            if not args.remote_path:
-                raise ValueError("exists requires --remote-path")
-            exists = sp.exists(args.remote_path)
-            result = {
-                "operation": "exists",
-                "success": True,
-                "remote_path": args.remote_path,
-                "exists": exists,
-            }
-        else:
-            raise ValueError(f"Unsupported operation: {op}")
-
-        if as_json:
-            print(json.dumps(result, indent=2))
-        else:
-            print(f"OK {op} successful")
-            if op == "list":
-                for item in result["items"]:
-                    kind = "folder" if item.get("is_folder") else "file"
-                    print(f"- {item.get('name')} ({kind})")
-            elif op == "exists":
-                print(f"Exists: {result['exists']}")
-
-    except Exception as e:
-        if as_json:
-            print(
-                json.dumps(
-                    {"operation": op, "success": False, "error": str(e)},
-                    indent=2,
-                )
-            )
-        else:
-            _print_actionable_error(e, command="run", profile=profile_name)
-        sys.exit(1)
+    _cmd_run(
+        args,
+        sharepoint_client_cls=SharePointClient,
+        classify_error=_classify_error_for_json,
+        print_run_result=_print_run_result,
+        print_actionable_error=_print_actionable_error,
+    )
 
 
 def cmd_doctor(args):
     """Run preflight diagnostics for local/bot execution."""
-    profile_name = args.profile or "default"
-    store_dir = args.store_dir
-    as_json = bool(getattr(args, "json", False))
-    checks = []
-
-    try:
-        store = TokenStore(store_dir=store_dir)
-        store_path = Path(store.store_dir)
-
-        # Token store path check
-        try:
-            store_path.mkdir(parents=True, exist_ok=True)
-            probe = store_path / ".doctor_write_probe"
-            probe.write_text("ok", encoding="utf-8")
-            probe.unlink(missing_ok=True)
-            checks.append({"name": "token_store_writable", "ok": True, "detail": str(store_path)})
-        except Exception as exc:
-            checks.append({"name": "token_store_writable", "ok": False, "detail": str(exc)})
-
-        # Local callback loopback check
-        class _Handler(BaseHTTPRequestHandler):
-            def log_message(self, format, *args):
-                return
-
-            def do_GET(self):
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b"ok")
-
-        try:
-            server = HTTPServer(("127.0.0.1", 0), _Handler)
-            port = server.server_port
-            t = threading.Thread(target=server.handle_request, daemon=True)
-            t.start()
-            body = urlopen(f"http://127.0.0.1:{port}", timeout=5).read().decode("utf-8")
-            server.server_close()
-            checks.append(
-                {
-                    "name": "localhost_callback",
-                    "ok": body == "ok",
-                    "detail": f"http://127.0.0.1:{port}",
-                }
-            )
-        except Exception as exc:
-            checks.append({"name": "localhost_callback", "ok": False, "detail": str(exc)})
-
-        # Profile health check
-        profile_data = store.load_profile(profile_name)
-        if profile_data:
-            missing = []
-            for field in ("client_id", "tenant_id", "refresh_token"):
-                if not profile_data.get(field):
-                    missing.append(field)
-            checks.append(
-                {
-                    "name": "profile_exists",
-                    "ok": True,
-                    "detail": profile_name,
-                }
-            )
-            checks.append(
-                {
-                    "name": "profile_required_fields",
-                    "ok": len(missing) == 0,
-                    "detail": "missing: " + ", ".join(missing) if missing else "ok",
-                }
-            )
-            checks.append(
-                {
-                    "name": "profile_target_bound",
-                    "ok": bool(profile_data.get("drive_id")),
-                    "detail": profile_data.get("drive_name") or "(unbound)",
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "name": "profile_exists",
-                    "ok": False,
-                    "detail": f"{profile_name} not found",
-                }
-            )
-
-        ok_all = all(c["ok"] for c in checks)
-        output = {
-            "profile": profile_name,
-            "ok": ok_all,
-            "checks": checks,
-        }
-
-        if as_json:
-            print(json.dumps(output, indent=2))
-        else:
-            print(f"\nDoctor report for profile: {profile_name}")
-            print("=" * 60)
-            for check in checks:
-                status = "OK" if check["ok"] else "FAIL"
-                print(f"{status:5} {check['name']}: {check['detail']}")
-            print()
-
-        if not ok_all:
-            sys.exit(1)
-    except Exception as e:
-        _print_actionable_error(e, command="doctor", profile=profile_name)
+    _cmd_doctor(
+        args,
+        unlink_if_exists=_unlink_if_exists,
+        print_actionable_error=_print_actionable_error,
+    )
 
 
 def main():

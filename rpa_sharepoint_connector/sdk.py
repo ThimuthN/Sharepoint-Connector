@@ -5,7 +5,6 @@ from typing import List, Dict, Optional
 from .auth import MicrosoftAuth
 from .token_store import TokenStore
 from .graph_client import GraphClient
-from .profiles import ProfileManager
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,6 @@ class SharePointClient:
             ValueError: If profile not found or tokens invalid
         """
         self.store = TokenStore(store_dir=store_dir)
-        self.profile_manager = ProfileManager(self.store)
 
         # Load profile
         profile_data = self.store.load_profile(profile)
@@ -54,6 +52,16 @@ class SharePointClient:
         )
         self._ensure_valid_token()
         self.graph = GraphClient(self.profile_data["access_token"])
+
+    def close(self) -> None:
+        """Close underlying network resources."""
+        self.graph.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
 
     def upload(
         self,
@@ -100,15 +108,8 @@ class SharePointClient:
         """
         logger.info(f"Downloading {remote_path} to {local_path}")
         try:
-            # If remote_path looks like a path, find the item ID first
-            if "/" in remote_path:
-                item_id = self._find_item_id(remote_path)
-            else:
-                item_id = remote_path
-
-            content = self.graph.download_file(self.drive_id, item_id)
-            with open(local_path, "wb") as f:
-                f.write(content)
+            item_id = self._resolve_item_id(remote_path)
+            self.graph.download_file_to_path(self.drive_id, item_id, local_path)
             logger.info(f"Downloaded successfully to {local_path}")
         except Exception as e:
             logger.error(f"Download failed: {e}")
@@ -137,10 +138,7 @@ class SharePointClient:
 
         logger.info(f"Deleting {remote_path}")
         try:
-            if "/" in remote_path:
-                item_id = self._find_item_id(remote_path)
-            else:
-                item_id = remote_path
+            item_id = self._resolve_item_id(remote_path)
 
             self.graph.delete_item(self.drive_id, item_id)
             logger.info(f"Deleted: {remote_path}")
@@ -158,13 +156,12 @@ class SharePointClient:
             True if exists, False otherwise
         """
         try:
-            if "/" in remote_path:
-                item_id = self._find_item_id(remote_path)
-            else:
-                item_id = remote_path
+            item_id = self._resolve_item_id(remote_path)
             return self.graph.item_exists(self.drive_id, item_id)
-        except:
-            return False
+        except ValueError as e:
+            if "not found" in str(e).lower():
+                return False
+            raise
 
     def list(self, folder_path: str = "") -> List[Dict]:
         """List files and folders in a folder.
@@ -209,26 +206,8 @@ class SharePointClient:
         """
         logger.info(f"Creating folder: {folder_path}")
         try:
-            parts = folder_path.split("/")
-            parent_id = self.folder_id
-
-            for folder_name in parts:
-                if not folder_name:
-                    continue
-                # Reuse existing folder if present; only create missing segments.
-                items = self.graph.list_items(self.drive_id, parent_id)
-                existing = None
-                for item in items:
-                    if item.get("name") == folder_name and "folder" in item:
-                        existing = item
-                        break
-
-                if existing:
-                    parent_id = existing["id"]
-                else:
-                    result = self.graph.create_folder(self.drive_id, parent_id, folder_name)
-                    parent_id = result["id"]
-
+            absolute_path = self._build_remote_path(folder_path)
+            parent_id = self.graph._ensure_folder_path(self.drive_id, absolute_path)
             logger.info(f"Created folder: {folder_path}")
             return parent_id
         except Exception as e:
@@ -253,20 +232,41 @@ class SharePointClient:
         """
         logger.info(f"Moving {source_path} to {target_path}")
         try:
-            source_id = (
-                self._find_item_id(source_path)
-                if "/" in source_path
-                else source_path
-            )
-            target_id = (
-                self._find_item_id(target_path) if "/" in target_path else target_path
-            )
+            source_id = self._resolve_item_id(source_path)
+            target_id = self._resolve_item_id(target_path)
 
             self.graph.move_item(self.drive_id, source_id, target_id, new_name)
             logger.info(f"Moved: {source_path} to {target_path}")
         except Exception as e:
             logger.error(f"Move failed: {e}")
             raise
+
+    def _resolve_item_id(self, value: str) -> str:
+        """Resolve a user-provided path or ID into a drive item ID.
+
+        Rules:
+        - `id:<value>` always means explicit item ID.
+        - values containing `/` are treated as paths.
+        - single-segment values try path lookup first, then fallback to raw ID.
+        """
+        candidate = (value or "").strip()
+        if not candidate:
+            raise ValueError("Path or item ID is required.")
+
+        if candidate.startswith("id:"):
+            explicit_id = candidate[3:].strip()
+            if not explicit_id:
+                raise ValueError("Explicit ID prefix provided but no item ID found.")
+            return explicit_id
+
+        if "/" in candidate:
+            return self._find_item_id(candidate)
+
+        # Single segment could be a root filename/folder or an item ID.
+        try:
+            return self._find_item_id(candidate)
+        except ValueError:
+            return candidate
 
     def health_check(self) -> Dict[str, bool]:
         """Perform preflight health check.
@@ -345,22 +345,16 @@ class SharePointClient:
         Raises:
             ValueError: If path not found
         """
-        current_id = self.folder_id
-        for part in path.split("/"):
-            if not part:
-                continue
-            items = self.graph.list_items(self.drive_id, current_id)
-            found = None
-            for item in items:
-                if item.get("name") == part:
-                    found = item
-                    break
+        absolute_path = self._build_remote_path(path)
+        item = self.graph.get_item_by_path(self.drive_id, absolute_path)
+        return item["id"]
 
-            if not found:
-                raise ValueError(f"Path not found: {path}")
-            current_id = found["id"]
-
-        return current_id
+    def _build_remote_path(self, path: str) -> str:
+        """Build a drive-root-relative path from configured base folder and user input."""
+        base_path = (self.profile_data.get("folder_path") or "").strip("/")
+        relative_path = (path or "").strip("/")
+        parts = [part for part in (base_path, relative_path) if part]
+        return "/".join(parts)
 
     def _ensure_valid_token(self) -> None:
         """Refresh token if expired or near expiry."""

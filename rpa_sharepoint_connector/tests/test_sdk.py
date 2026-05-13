@@ -1,6 +1,6 @@
 """Tests for SharePointClient SDK."""
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from datetime import datetime, timedelta
 
 
@@ -31,6 +31,22 @@ class TestSharePointClient:
     def test_upload_succeeds(self, mock_profile):
         """Test upload operation."""
         from rpa_sharepoint_connector import SharePointClient
-        with patch('rpa_sharepoint_connector.sdk.TokenStore'):
-            with patch('rpa_sharepoint_connector.sdk.GraphClient'):
-                pass  # Would test with mocks
+        with patch('rpa_sharepoint_connector.sdk.TokenStore') as MockStore:
+            mock_store = MockStore.return_value
+            mock_store.load_profile.return_value = mock_profile
+
+            with patch('rpa_sharepoint_connector.sdk.MicrosoftAuth'):
+                with patch('rpa_sharepoint_connector.sdk.GraphClient') as MockGraph:
+                    mock_graph = MockGraph.return_value
+                    mock_graph.upload_file.return_value = {"id": "file_123"}
+
+                    client = SharePointClient(profile="demo")
+                    item_id = client.upload("local.pdf", "Invoices/local.pdf")
+
+                    assert item_id == "file_123"
+                    mock_graph.upload_file.assert_called_once_with(
+                        "drive_456",
+                        "local.pdf",
+                        "Invoices/local.pdf",
+                        conflict="overwrite",
+                    )

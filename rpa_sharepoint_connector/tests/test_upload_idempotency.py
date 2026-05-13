@@ -31,7 +31,7 @@ class TestUploadConflictModes:
                 "id": "file_1",
                 "name": "test.pdf"
             }
-            mock_client.return_value.__enter__.return_value.put.return_value = mock_response
+            mock_client.return_value.put.return_value = mock_response
 
             with patch('rpa_sharepoint_connector.graph_client.GraphClient._ensure_folder_path') as mock_ensure:
                 mock_ensure.return_value = "folder_1"
@@ -73,7 +73,7 @@ class TestUploadConflictModes:
                     "id": "file_1",
                     "name": "test.pdf"
                 }
-                mock_client.return_value.__enter__.return_value.put.return_value = mock_response
+                mock_client.return_value.put.return_value = mock_response
 
                 with patch('rpa_sharepoint_connector.graph_client.GraphClient._ensure_folder_path') as mock_ensure:
                     mock_ensure.return_value = "folder_1"
@@ -94,7 +94,7 @@ class TestUploadConflictModes:
                 "id": "file_1",
                 "name": "test.pdf"
             }
-            mock_client.return_value.__enter__.return_value.put.return_value = mock_response
+            mock_client.return_value.put.return_value = mock_response
 
             with patch('rpa_sharepoint_connector.graph_client.GraphClient._ensure_folder_path') as mock_ensure:
                 mock_ensure.return_value = "folder_1"
@@ -121,7 +121,7 @@ class TestUploadConflictModes:
                     "id": "file_2",
                     "name": "test (1).pdf"
                 }
-                mock_client.return_value.__enter__.return_value.put.return_value = mock_response
+                mock_client.return_value.put.return_value = mock_response
 
                 with patch('rpa_sharepoint_connector.graph_client.GraphClient._ensure_folder_path') as mock_ensure:
                     mock_ensure.return_value = "folder_1"
@@ -133,7 +133,7 @@ class TestUploadConflictModes:
                     )
 
                     # Check that rename happened
-                    call_url = mock_client.return_value.__enter__.return_value.put.call_args[0][0]
+                    call_url = mock_client.return_value.put.call_args[0][0]
                     assert "test (1).pdf" in call_url
 
     def test_upload_rename_multiple_conflicts(self, temp_file):
@@ -151,7 +151,7 @@ class TestUploadConflictModes:
                     "id": "file_4",
                     "name": "test (3).pdf"
                 }
-                mock_client.return_value.__enter__.return_value.put.return_value = mock_response
+                mock_client.return_value.put.return_value = mock_response
 
                 with patch('rpa_sharepoint_connector.graph_client.GraphClient._ensure_folder_path') as mock_ensure:
                     mock_ensure.return_value = "folder_1"
@@ -163,7 +163,7 @@ class TestUploadConflictModes:
                     )
 
                     # Should use test (3).pdf (next available)
-                    call_url = mock_client.return_value.__enter__.return_value.put.call_args[0][0]
+                    call_url = mock_client.return_value.put.call_args[0][0]
                     assert "test (3).pdf" in call_url
 
     def test_upload_invalid_conflict_mode(self, temp_file):
@@ -345,7 +345,7 @@ class TestRetryIdempotency:
                 # Retry attempt finds file exists
                 mock_response = MagicMock()
                 mock_response.json.return_value = {"id": "file_1", "name": "test.pdf"}
-                mock_client.return_value.__enter__.return_value.put.return_value = mock_response
+                mock_client.return_value.put.return_value = mock_response
 
                 with patch('rpa_sharepoint_connector.graph_client.GraphClient._ensure_folder_path') as mock_ensure:
                     mock_ensure.return_value = "folder_1"
@@ -385,7 +385,7 @@ class TestRetryIdempotency:
                 mock_response2 = MagicMock()
                 mock_response2.json.return_value = {"id": "file_2", "name": "test (2).pdf"}
 
-                mock_client.return_value.__enter__.return_value.put.side_effect = [
+                mock_client.return_value.put.side_effect = [
                     mock_response1, mock_response2
                 ]
 

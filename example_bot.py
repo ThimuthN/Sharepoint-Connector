@@ -9,82 +9,85 @@ Before running this bot:
 """
 from rpa_sharepoint_connector import SharePointClient
 import logging
+from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+WORK_DIR = Path("example_bot_artifacts")
+
+
+def run_step(title: str, action) -> None:
+    """Run one bot step and stop immediately if it fails."""
+    logger.info(title)
+    try:
+        action()
+    except Exception:
+        logger.exception("Step failed")
+        raise
 
 
 def main():
     """Example bot workflow."""
     # Initialize client (uses stored token - no login required)
     sp = SharePointClient(profile="client_a")
+    WORK_DIR.mkdir(exist_ok=True)
+    upload_path = WORK_DIR / "test_upload.txt"
+    download_path = WORK_DIR / "test_download.txt"
 
     logger.info("Starting SharePoint operations...")
 
-    # List files in default folder
-    logger.info("\n1. Listing files in default folder:")
-    try:
-        files = sp.list()
-        for f in files:
-            logger.info(f"   {f['name']} ({'folder' if f['is_folder'] else 'file'})")
-    except Exception as e:
-        logger.error(f"   Error: {e}")
-
-    # Create a folder
-    logger.info("\n2. Creating test folder:")
-    try:
-        sp.mkdir("RPA_Test/Processed")
-        logger.info("   Created RPA_Test/Processed")
-    except Exception as e:
-        logger.error(f"   Error: {e}")
-
-    # Upload a sample file
-    logger.info("\n3. Uploading test file:")
-    try:
-        # Create a test file
-        with open("test_upload.txt", "w") as f:
-            f.write("This is a test file uploaded by the bot\n")
-
-        sp.upload("test_upload.txt", "RPA_Test/test_upload.txt")
-        logger.info("   Uploaded test_upload.txt")
-    except Exception as e:
-        logger.error(f"   Error: {e}")
-
-    # Check if file exists
-    logger.info("\n4. Checking if file exists:")
-    try:
-        exists = sp.exists("RPA_Test/test_upload.txt")
-        logger.info(f"   File exists: {exists}")
-    except Exception as e:
-        logger.error(f"   Error: {e}")
-
-    # Download the file
-    logger.info("\n5. Downloading file:")
-    try:
-        sp.download("RPA_Test/test_upload.txt", "test_download.txt")
-        with open("test_download.txt", "r") as f:
-            content = f.read()
-        logger.info(f"   Downloaded: {content}")
-    except Exception as e:
-        logger.error(f"   Error: {e}")
-
-    # Move file
-    logger.info("\n6. Moving file to Processed folder:")
-    try:
-        sp.move("RPA_Test/test_upload.txt", "RPA_Test/Processed")
-        logger.info("   Moved to RPA_Test/Processed")
-    except Exception as e:
-        logger.error(f"   Error: {e}")
-
-    # Delete file
-    logger.info("\n7. Deleting file:")
-    try:
-        sp.delete("RPA_Test/Processed/test_upload.txt")
-        logger.info("   Deleted")
-    except Exception as e:
-        logger.error(f"   Error: {e}")
+    run_step("\n1. Listing files in default folder:", lambda: _list_files(sp))
+    run_step("\n2. Creating test folder:", lambda: _create_folder(sp))
+    run_step("\n3. Uploading test file:", lambda: _upload_file(sp, upload_path))
+    run_step("\n4. Checking if file exists:", lambda: _check_exists(sp))
+    run_step("\n5. Downloading file:", lambda: _download_file(sp, download_path))
+    run_step("\n6. Moving file to Processed folder:", lambda: _move_file(sp))
+    run_step("\n7. Deleting file:", lambda: _delete_file(sp))
 
     logger.info("\nBot completed.")
+
+
+def _list_files(sp: SharePointClient) -> None:
+    files = sp.list()
+    for file_info in files:
+        kind = "folder" if file_info["is_folder"] else "file"
+        logger.info("   %s (%s)", file_info["name"], kind)
+
+
+def _create_folder(sp: SharePointClient) -> None:
+    sp.mkdir("RPA_Test/Processed")
+    logger.info("   Created RPA_Test/Processed")
+
+
+def _upload_file(sp: SharePointClient, upload_path: Path) -> None:
+    upload_path.write_text(
+        "This is a test file uploaded by the bot\n",
+        encoding="utf-8",
+    )
+    sp.upload(str(upload_path), "RPA_Test/test_upload.txt")
+    logger.info("   Uploaded %s", upload_path.name)
+
+
+def _check_exists(sp: SharePointClient) -> None:
+    exists = sp.exists("RPA_Test/test_upload.txt")
+    logger.info("   File exists: %s", exists)
+
+
+def _download_file(sp: SharePointClient, download_path: Path) -> None:
+    sp.download("RPA_Test/test_upload.txt", str(download_path))
+    content = download_path.read_text(encoding="utf-8")
+    logger.info("   Downloaded: %s", content.strip())
+
+
+def _move_file(sp: SharePointClient) -> None:
+    sp.move("RPA_Test/test_upload.txt", "RPA_Test/Processed")
+    logger.info("   Moved to RPA_Test/Processed")
+
+
+def _delete_file(sp: SharePointClient) -> None:
+    sp.delete("RPA_Test/Processed/test_upload.txt")
+    logger.info("   Deleted")
 
 
 if __name__ == "__main__":
