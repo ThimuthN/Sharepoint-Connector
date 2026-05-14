@@ -10,30 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 class SharePointClient:
-    """Simple client for bots to interact with SharePoint.
-
-    Usage:
-        sp = SharePointClient(profile="client_a")
-        sp.upload("local.pdf", "Invoices/Incoming/local.pdf")
-        sp.download("Invoices/Incoming/invoice.pdf", "invoice.pdf")
-        files = sp.list("Invoices/Incoming")
-        sp.delete("Invoices/Temp/old.pdf")
-    """
+    """SharePoint client for bots."""
 
     def __init__(self, profile: str, store_dir: Optional[str] = None, sharepoint_url: Optional[str] = None):
-        """Initialize SharePoint client.
-
-        Args:
-            profile: Profile name (must be configured first)
-            store_dir: Optional token store directory
-            sharepoint_url: Optional SharePoint site URL to auto-resolve drive (skips set-target)
-
-        Raises:
-            ValueError: If profile not found or tokens invalid
-        """
         self.store = TokenStore(store_dir=store_dir)
-
-        # Load profile
         profile_data = self.store.load_profile(profile)
         if not profile_data:
             raise ValueError(
@@ -45,7 +25,6 @@ class SharePointClient:
         self.profile_data = profile_data
         self.sharepoint_url = sharepoint_url
 
-        # Initialize auth using profile-bound app/tenant when available.
         self.auth = MicrosoftAuth(
             client_id=profile_data.get("client_id"),
             tenant_id=profile_data.get("tenant_id"),
@@ -53,7 +32,6 @@ class SharePointClient:
         self._ensure_valid_token()
         self.graph = GraphClient(self.profile_data["access_token"])
 
-        # Resolve drive and folder
         if sharepoint_url:
             self._resolve_drive_from_url()
         else:
@@ -109,28 +87,7 @@ class SharePointClient:
         except Exception as e:
             raise ValueError(f"Failed to resolve SharePoint URL: {e}") from e
 
-    def upload(
-        self,
-        local_path: str,
-        remote_path: str,
-        conflict: str = "overwrite",
-    ) -> str:
-        """Upload a file to SharePoint with conflict handling.
-
-        Args:
-            local_path: Local file path
-            remote_path: Remote path (e.g., "Folder/filename.pdf")
-            conflict: Conflict behavior:
-                - "overwrite": Replace existing file (default for backwards compatibility)
-                - "fail_if_exists": Raise error if file exists
-                - "rename": Create unique filename if exists (e.g., file (1).pdf)
-
-        Returns:
-            Item ID of uploaded file
-
-        Raises:
-            ValueError: If upload fails or conflict="fail_if_exists" and file exists
-        """
+    def upload(self, local_path: str, remote_path: str, conflict: str = "overwrite") -> str:
         logger.info(f"Uploading {local_path} to {remote_path} (conflict={conflict})")
         try:
             result = self.graph.upload_file(
@@ -143,122 +100,19 @@ class SharePointClient:
             raise
 
     def download(self, remote_path: str, local_path: str) -> None:
-        """Download a file from SharePoint.
-
-        Args:
-            remote_path: Remote file path or item ID
-            local_path: Local file path to save to
-
-        Raises:
-            ValueError: If download fails
-        """
-        logger.info(f"Downloading {remote_path} to {local_path}")
-        try:
-            item_id = self._resolve_item_id(remote_path)
-            self.graph.download_file_to_path(self.drive_id, item_id, local_path)
-            logger.info(f"Downloaded successfully to {local_path}")
-        except Exception as e:
-            logger.error(f"Download failed: {e}")
-            raise
+        """Download a file from SharePoint."""
 
     def delete(self, remote_path: str) -> None:
-        """Delete a file or folder.
-
-        Args:
-            remote_path: Remote file/folder path or item ID
-
-        Raises:
-            ValueError: If delete fails or path is dangerous
-        """
-        # Prevent deletion of root or configured folder
-        if not remote_path or remote_path == "/" or remote_path == "root":
-            raise ValueError(
-                "Cannot delete root folder. Specify the file/folder to delete."
-            )
-
-        if remote_path == self.profile_data.get("folder_path", ""):
-            raise ValueError(
-                f"Cannot delete configured default folder: {remote_path}. "
-                "This would break future operations."
-            )
-
-        logger.info(f"Deleting {remote_path}")
-        try:
-            item_id = self._resolve_item_id(remote_path)
-
-            self.graph.delete_item(self.drive_id, item_id)
-            logger.info(f"Deleted: {remote_path}")
-        except Exception as e:
-            logger.error(f"Delete failed: {e}")
-            raise
+        """Delete a file or folder."""
 
     def exists(self, remote_path: str) -> bool:
-        """Check if file/folder exists.
-
-        Args:
-            remote_path: Remote path or item ID
-
-        Returns:
-            True if exists, False otherwise
-        """
-        try:
-            item_id = self._resolve_item_id(remote_path)
-            return self.graph.item_exists(self.drive_id, item_id)
-        except ValueError as e:
-            if "not found" in str(e).lower():
-                return False
-            raise
+        """Check if file/folder exists."""
 
     def list(self, folder_path: str = "") -> List[Dict]:
-        """List files and folders in a folder.
-
-        Args:
-            folder_path: Folder path (defaults to configured folder)
-
-        Returns:
-            List of items with name, id, size, etc.
-        """
-        try:
-            if folder_path:
-                parent_id = self._find_item_id(folder_path)
-            else:
-                parent_id = self.folder_id
-
-            items = self.graph.list_items(self.drive_id, parent_id)
-            return [
-                {
-                    "name": item.get("name"),
-                    "id": item.get("id"),
-                    "size": item.get("size", 0),
-                    "is_folder": "folder" in item,
-                }
-                for item in items
-            ]
-        except Exception as e:
-            logger.error(f"List failed: {e}")
-            raise
+        """List files and folders in a folder."""
 
     def mkdir(self, folder_path: str) -> str:
-        """Create a folder.
-
-        Args:
-            folder_path: Path to create (e.g., "Invoices/Temp")
-
-        Returns:
-            Item ID of created folder
-
-        Raises:
-            ValueError: If creation fails
-        """
-        logger.info(f"Creating folder: {folder_path}")
-        try:
-            absolute_path = self._build_remote_path(folder_path)
-            parent_id = self.graph._ensure_folder_path(self.drive_id, absolute_path)
-            logger.info(f"Created folder: {folder_path}")
-            return parent_id
-        except Exception as e:
-            logger.error(f"Mkdir failed: {e}")
-            raise
+        """Create a folder."""
 
     def move(
         self,
@@ -266,26 +120,7 @@ class SharePointClient:
         target_path: str,
         new_name: Optional[str] = None,
     ) -> None:
-        """Move or rename a file/folder.
-
-        Args:
-            source_path: Source file/folder path or ID
-            target_path: Target folder path or ID
-            new_name: Optional new name
-
-        Raises:
-            ValueError: If move fails
-        """
-        logger.info(f"Moving {source_path} to {target_path}")
-        try:
-            source_id = self._resolve_item_id(source_path)
-            target_id = self._resolve_item_id(target_path)
-
-            self.graph.move_item(self.drive_id, source_id, target_id, new_name)
-            logger.info(f"Moved: {source_path} to {target_path}")
-        except Exception as e:
-            logger.error(f"Move failed: {e}")
-            raise
+        """Move or rename a file/folder."""
 
     def _resolve_item_id(self, value: str) -> str:
         """Resolve a user-provided path or ID into a drive item ID.
@@ -380,20 +215,7 @@ class SharePointClient:
             raise
 
     def _find_item_id(self, path: str) -> str:
-        """Find item ID from a path.
-
-        Args:
-            path: File/folder path (e.g., "Folder/SubFolder/file.pdf")
-
-        Returns:
-            Item ID
-
-        Raises:
-            ValueError: If path not found
-        """
-        absolute_path = self._build_remote_path(path)
-        item = self.graph.get_item_by_path(self.drive_id, absolute_path)
-        return item["id"]
+        """Find item ID from a path."""
 
     def _build_remote_path(self, path: str) -> str:
         """Build a drive-root-relative path from configured base folder and user input."""

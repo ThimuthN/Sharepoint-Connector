@@ -16,12 +16,7 @@ class TokenStore:
     INVALID_PROFILE_NAME_CHARS = {"/", "\\", ":"}
 
     def __init__(self, store_dir: Optional[str] = None, encryption_key: Optional[str] = None):
-        """Initialize token store.
-
-        Args:
-            store_dir: Directory to store profiles (defaults to ~/.rpa_sharepoint_connector)
-            encryption_key: Base64-encoded Fernet key (generates if not provided)
-        """
+        """Initialize token store."""
         if store_dir is None:
             store_dir = os.path.expanduser("~/.rpa_sharepoint_connector")
         self.store_dir = Path(store_dir)
@@ -70,12 +65,7 @@ class TokenStore:
         return self.store_dir / f"{normalized}.json"
 
     def save_profile(self, profile_name: str, profile_data: Dict) -> None:
-        """Save encrypted profile.
-
-        Args:
-            profile_name: Profile identifier
-            profile_data: Profile dict with tokens and config
-        """
+        """Save encrypted profile."""
         # Encrypt sensitive fields
         encrypted_data = profile_data.copy()
         if "access_token" in encrypted_data:
@@ -92,14 +82,7 @@ class TokenStore:
         logger.info(f"Saved profile: {profile_name}")
 
     def load_profile(self, profile_name: str) -> Optional[Dict]:
-        """Load and decrypt profile.
-
-        Args:
-            profile_name: Profile identifier
-
-        Returns:
-            Decrypted profile dict or None if not found
-        """
+        """Load and decrypt profile."""
         profile_file = self._profile_path(profile_name)
         if not profile_file.exists():
             return None
@@ -119,22 +102,14 @@ class TokenStore:
             raise ValueError(f"Failed to load profile: {str(e)}")
 
     def delete_profile(self, profile_name: str) -> None:
-        """Delete a profile.
-
-        Args:
-            profile_name: Profile identifier
-        """
+        """Delete a profile."""
         profile_file = self._profile_path(profile_name)
         if profile_file.exists():
             profile_file.unlink()
             logger.info(f"Deleted profile: {profile_name}")
 
     def list_profiles(self) -> list:
-        """List all saved profiles.
-
-        Returns:
-            List of profile names
-        """
+        """List all saved profiles."""
         return [
             f.stem for f in self.store_dir.glob("*.json")
             if not f.stem.startswith(".")

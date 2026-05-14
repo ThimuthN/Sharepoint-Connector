@@ -93,75 +93,7 @@ class GraphClient:
         remote_path: str,
         conflict: str = "overwrite",
     ) -> Dict:
-        """Upload a file to SharePoint with conflict handling.
-
-        Args:
-            drive_id: Target drive ID
-            file_path: Local file path to upload
-            remote_path: Remote path (e.g., "Folder/filename.pdf")
-            conflict: Conflict behavior:
-                - "overwrite": Replace existing file (default for backwards compatibility)
-                - "fail_if_exists": Raise error if file exists
-                - "rename": Create unique filename if exists (e.g., file (1).pdf)
-
-        Returns:
-            Uploaded item metadata
-
-        Raises:
-            ValueError: If file exists and conflict="fail_if_exists"
-        """
-        if conflict not in ("overwrite", "fail_if_exists", "rename"):
-            raise ValueError(f"Invalid conflict mode: {conflict}")
-
-        file_size = None
-        try:
-            file_size = os.path.getsize(file_path)
-        except OSError:
-            # Keep legacy testability/paths where open() may be mocked without a real file.
-            file_size = None
-
-        # Split path into folder and filename
-        parts = remote_path.split("/")
-        filename = parts[-1]
-        folder_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
-
-        # Get or create folder structure
-        target_item_id = "root"
-        if folder_path:
-            target_item_id = self._ensure_folder_path(drive_id, folder_path)
-
-        # Preserve current deterministic conflict behavior for small and large uploads.
-        if conflict == "fail_if_exists":
-            items = self.list_items(drive_id, target_item_id)
-            for item in items:
-                if item.get("name") == filename and "file" in item:
-                    raise ValueError(
-                        f"File already exists: {remote_path}. "
-                        "Use conflict='overwrite' to replace or 'rename' to create variant."
-                    )
-        elif conflict == "rename":
-            items = self.list_items(drive_id, target_item_id)
-            existing_names = {item.get("name") for item in items}
-            if filename in existing_names:
-                filename = self._generate_unique_filename(filename, existing_names)
-                logger.info(f"File exists, renaming to: {filename}")
-
-        if file_size is not None and file_size > self.SIMPLE_UPLOAD_LIMIT_BYTES:
-            return self._upload_file_via_session(
-                drive_id=drive_id,
-                target_item_id=target_item_id,
-                file_path=file_path,
-                filename=filename,
-                conflict=conflict,
-                file_size=file_size,
-            )
-
-        return self._upload_file_simple(
-            drive_id=drive_id,
-            target_item_id=target_item_id,
-            file_path=file_path,
-            filename=filename,
-        )
+        """Upload a file to SharePoint with conflict handling."""
 
     def _upload_file_simple(
         self,
@@ -296,16 +228,7 @@ class GraphClient:
         raise ValueError("Large file upload did not complete successfully.")
 
     def download_file(self, drive_id: str, item_id: str) -> bytes:
-        """Download a file from SharePoint.
-
-        Args:
-            drive_id: Source drive ID
-            item_id: File item ID
-
-        Returns:
-            File content as bytes
-        """
-        url = f"{self.base_url}/drives/{drive_id}/items/{item_id}/content"
+        """Download a file from SharePoint."""
 
         def _do_download():
             client = self._get_client()
@@ -382,13 +305,7 @@ class GraphClient:
             raise ValueError(f"Failed to download file: {str(e)}") from e
 
     def delete_item(self, drive_id: str, item_id: str) -> None:
-        """Delete a file or folder (idempotent).
-
-        Args:
-            drive_id: Target drive ID
-            item_id: Item ID to delete
-        """
-        url = f"{self.base_url}/drives/{drive_id}/items/{item_id}"
+        """Delete a file or folder (idempotent)."""
 
         def _do_delete():
             client = self._get_client()
@@ -424,22 +341,7 @@ class GraphClient:
             return False
 
     def create_folder(self, drive_id: str, item_id: str, folder_name: str) -> Dict:
-        """Create a folder.
-
-        Args:
-            drive_id: Target drive ID
-            item_id: Parent item ID
-            folder_name: Name of folder to create
-
-        Returns:
-            Created folder metadata
-        """
-        url = f"{self.base_url}/drives/{drive_id}/items/{item_id}/children"
-        data = {
-            "name": folder_name,
-            "folder": {},
-            "@microsoft.graph.conflictBehavior": "rename",
-        }
+        """Create a folder."""
 
         def _do_create():
             client = self._get_client()
@@ -469,21 +371,7 @@ class GraphClient:
         new_parent_id: str,
         new_name: Optional[str] = None,
     ) -> Dict:
-        """Move or rename an item.
-
-        Args:
-            drive_id: Drive ID
-            item_id: Item to move
-            new_parent_id: New parent item ID
-            new_name: Optional new name
-
-        Returns:
-            Updated item metadata
-        """
-        url = f"{self.base_url}/drives/{drive_id}/items/{item_id}"
-        data = {"parentReference": {"id": new_parent_id}}
-        if new_name:
-            data["name"] = new_name
+        """Move or rename an item."""
 
         def _do_move():
             client = self._get_client()
@@ -507,78 +395,12 @@ class GraphClient:
             raise ValueError(f"Failed to move item: {str(e)}") from e
 
     def _ensure_folder_path(self, drive_id: str, folder_path: str) -> str:
-        """Ensure folder path exists, creating folders as needed.
-
-        Args:
-            drive_id: Target drive ID
-            folder_path: Path like "Folder/SubFolder"
-
-        Returns:
-            Item ID of the last folder in path
-        """
-        normalized_path = self._normalize_drive_path(folder_path)
-        if not normalized_path:
-            return "root"
-
-        try:
-            existing = self.get_item_by_path(drive_id, normalized_path)
-            if "folder" not in existing:
-                raise ValueError(f"Path exists but is not a folder: {normalized_path}")
-            return existing["id"]
-        except ValueError as exc:
-            if "not found" not in str(exc).lower():
-                raise
-
-        current_id = "root"
-        current_path_parts = []
-        for folder_name in normalized_path.split("/"):
-            current_path_parts.append(folder_name)
-            current_path = "/".join(current_path_parts)
-            try:
-                existing = self.get_item_by_path(drive_id, current_path)
-                if "folder" not in existing:
-                    raise ValueError(f"Path exists but is not a folder: {current_path}")
-                current_id = existing["id"]
-            except Exception as e:
-                if "not found" not in str(e).lower():
-                    logger.warning(f"Could not ensure folder {folder_name}: {e}")
-                    raise
-                created = self.create_folder(drive_id, current_id, folder_name)
-                current_id = created["id"]
-
-        return current_id
+        """Ensure folder path exists, creating folders as needed."""
 
     def _generate_unique_filename(
         self, filename: str, existing_names: set
     ) -> str:
-        """Generate a unique filename when target exists.
-
-        Args:
-            filename: Original filename (e.g., "invoice.pdf")
-            existing_names: Set of existing filenames in target folder
-
-        Returns:
-            Unique filename (e.g., "invoice (1).pdf")
-        """
-        if filename not in existing_names:
-            return filename
-
-        # Split into name and extension
-        if "." in filename:
-            parts = filename.rsplit(".", 1)
-            base, ext = parts[0], "." + parts[1]
-        else:
-            base, ext = filename, ""
-
-        # Find next available number
-        counter = 1
-        while True:
-            candidate = f"{base} ({counter}){ext}"
-            if candidate not in existing_names:
-                return candidate
-            counter += 1
-
-    @staticmethod
+        """Generate a unique filename when target exists."""
     def _normalize_drive_path(path: str) -> str:
         """Normalize drive-relative path by removing empty segments."""
         return "/".join(segment for segment in (path or "").split("/") if segment)
@@ -622,17 +444,7 @@ class GraphClient:
             raise ValueError(f"Graph API error: {str(e)}") from e
 
     def _get(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
-        """Make GET request to Microsoft Graph with retry.
-
-        Args:
-            endpoint: API endpoint (with leading /)
-            params: Optional query parameters
-
-        Returns:
-            Response JSON as dict
-        """
-        url = f"{self.base_url}{endpoint}"
-        return self._get_json(url, operation_name=f"GET {endpoint}", params=params)
+        """Make GET request to Microsoft Graph with retry."""
 
     def _get_paginated(self, endpoint: str) -> List[Dict]:
         """Fetch all pages for list endpoints using @odata.nextLink."""

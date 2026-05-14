@@ -29,15 +29,7 @@ class RetryConfig:
 
 
 def is_transient_error(exc: Exception, status_code: Optional[int] = None) -> bool:
-    """Check if exception is a transient error worth retrying.
-
-    Args:
-        exc: Exception that occurred
-        status_code: HTTP status code if available
-
-    Returns:
-        True if error is transient and should be retried
-    """
+    """Check if exception is a transient error worth retrying."""
     # Check HTTP status codes first
     if isinstance(exc, httpx.HTTPError):
         if hasattr(exc, "response") and exc.response is not None:
@@ -66,15 +58,7 @@ def is_transient_error(exc: Exception, status_code: Optional[int] = None) -> boo
 def calculate_backoff(
     attempt: int, config: RetryConfig
 ) -> float:
-    """Calculate wait time with exponential backoff and jitter.
-
-    Args:
-        attempt: Current attempt number (0-indexed)
-        config: Retry configuration
-
-    Returns:
-        Seconds to wait before next attempt
-    """
+    """Calculate wait time with exponential backoff and jitter."""
     # Exponential backoff: initial * (multiplier ^ attempt)
     wait = config.initial_wait_seconds * (config.backoff_multiplier ** attempt)
 
@@ -90,11 +74,7 @@ def calculate_backoff(
 
 
 def get_retry_after_header(response: httpx.Response) -> Optional[float]:
-    """Extract Retry-After value from response headers.
-
-    Returns:
-        Seconds to wait, or None if header not present
-    """
+    """Extract Retry-After value from response headers."""
     retry_after = response.headers.get("Retry-After")
     if not retry_after:
         return None
@@ -112,20 +92,7 @@ def retry_operation(
     config: RetryConfig,
     operation_name: str = "operation",
 ) -> T:
-    """Execute operation with retry logic.
-
-    Args:
-        operation: Callable that performs the operation
-        config: Retry configuration
-        operation_name: Name for logging
-
-    Returns:
-        Result of operation
-
-    Raises:
-        ValueError: If all retry attempts exhausted
-        Exception: Original exception if not transient
-    """
+    """Execute operation with retry logic."""
     last_exception = None
     last_status_code = None
 

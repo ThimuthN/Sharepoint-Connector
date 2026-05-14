@@ -23,12 +23,7 @@ class MicrosoftAuth:
         client_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
     ):
-        """Initialize Microsoft auth client.
-
-        Args:
-            client_id: Microsoft client ID (defaults to Innobot public app)
-            tenant_id: Microsoft tenant identifier
-        """
+        """Initialize Microsoft auth client."""
         self.client_id = client_id or MICROSOFT_CLIENT_ID
         self.tenant_id = tenant_id or os.getenv("MICROSOFT_TENANT_ID", "common")
         self.scopes = [
@@ -51,10 +46,7 @@ class MicrosoftAuth:
             return "", ""
 
     def refresh_token(self, refresh_token: str) -> Dict:
-        """Refresh access token using a refresh token.
-
-        Public-client refresh does not use client secret.
-        """
+        """Refresh access token using a refresh token."""
         data = {
             "client_id": self.client_id,
             "refresh_token": refresh_token,
