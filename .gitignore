@@ -26,3 +26,25 @@ dist/
 *.swp
 *.swo
 *~
+
+# Token storage (local credentials - never commit)
+.rpa_sharepoint_connector/
+
+# Test artifacts
+test_artifacts/
+test_*.txt
+test_*.json
+test_*.csv
+test_*.bin
+test_*.xml
+downloaded_*.json
+large_files/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+Thumbs.db

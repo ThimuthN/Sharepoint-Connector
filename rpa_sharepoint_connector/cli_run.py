@@ -123,10 +123,28 @@ def cmd_run(
     store_dir = args.store_dir
     op = args.op
     as_json = bool(getattr(args, "json", False))
+    sharepoint_url = getattr(args, "sharepoint_url", None)
+    folder_url = getattr(args, "folder_url", None)
+
+    # Handle --folder-url by extracting site URL and updating remote-path
+    if folder_url:
+        from urllib.parse import urlparse, unquote
+        parsed = urlparse(folder_url)
+        sharepoint_url = f"{parsed.scheme}://{parsed.hostname}"
+        # Extract folder path from URL
+        path = unquote(parsed.path or "")
+        if path and path != "/":
+            # Append folder path to remote-path
+            folder_path = path.lstrip("/")
+            if hasattr(args, "remote_path") and args.remote_path:
+                args.remote_path = f"{folder_path}/{args.remote_path}"
+            else:
+                args.remote_path = folder_path
+
     sp = None
 
     try:
-        sp = sharepoint_client_cls(profile=profile_name, store_dir=store_dir)
+        sp = sharepoint_client_cls(profile=profile_name, store_dir=store_dir, sharepoint_url=sharepoint_url)
         handler = RUN_OPERATION_HANDLERS.get(op)
         if handler is None:
             raise ValueError(f"Unsupported operation: {op}")

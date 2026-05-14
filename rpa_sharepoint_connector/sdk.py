@@ -20,12 +20,13 @@ class SharePointClient:
         sp.delete("Invoices/Temp/old.pdf")
     """
 
-    def __init__(self, profile: str, store_dir: Optional[str] = None):
+    def __init__(self, profile: str, store_dir: Optional[str] = None, sharepoint_url: Optional[str] = None):
         """Initialize SharePoint client.
 
         Args:
             profile: Profile name (must be configured first)
             store_dir: Optional token store directory
+            sharepoint_url: Optional SharePoint site URL to auto-resolve drive (skips set-target)
 
         Raises:
             ValueError: If profile not found or tokens invalid
@@ -42,8 +43,7 @@ class SharePointClient:
 
         self.profile = profile
         self.profile_data = profile_data
-        self.drive_id = profile_data["drive_id"]
-        self.folder_id = profile_data["folder_id"]
+        self.sharepoint_url = sharepoint_url
 
         # Initialize auth using profile-bound app/tenant when available.
         self.auth = MicrosoftAuth(
@@ -52,6 +52,13 @@ class SharePointClient:
         )
         self._ensure_valid_token()
         self.graph = GraphClient(self.profile_data["access_token"])
+
+        # Resolve drive and folder
+        if sharepoint_url:
+            self._resolve_drive_from_url()
+        else:
+            self.drive_id = profile_data["drive_id"]
+            self.folder_id = profile_data["folder_id"]
 
     def close(self) -> None:
         """Close underlying network resources."""
@@ -62,6 +69,45 @@ class SharePointClient:
 
     def __exit__(self, exc_type, exc, tb):
         self.close()
+
+    def _resolve_drive_from_url(self) -> None:
+        """Resolve drive_id and folder_id from SharePoint URL."""
+        from urllib.parse import urlparse
+        try:
+            parsed_url = urlparse(self.sharepoint_url)
+            hostname = parsed_url.hostname
+
+            if not hostname:
+                raise ValueError("Invalid SharePoint URL: missing hostname")
+
+            # Try standard site path first
+            try:
+                from .cli_setup import parse_sharepoint_url
+                parsed = parse_sharepoint_url(self.sharepoint_url)
+                site_path = parsed["site_path"]
+                library_name = parsed.get("library_name", "Documents")
+                folder_path = parsed.get("folder_path", "")
+                site = self.graph._get(f"/sites/{hostname}:{site_path}")
+            except ValueError:
+                # Fall back to root site
+                site = self.graph._get(f"/sites/{hostname}:/")
+                library_name = "Documents"
+                folder_path = ""
+
+            drives = self.graph.list_drives(site["id"])
+
+            from .cli_setup import select_drive
+            drive = select_drive(drives, library_name)
+            self.drive_id = drive["id"]
+
+            if folder_path:
+                self.folder_id = self.graph._ensure_folder_path(drive["id"], folder_path)
+            else:
+                self.folder_id = "root"
+
+            logger.info(f"Resolved SharePoint URL to drive: {self.drive_id}")
+        except Exception as e:
+            raise ValueError(f"Failed to resolve SharePoint URL: {e}") from e
 
     def upload(
         self,

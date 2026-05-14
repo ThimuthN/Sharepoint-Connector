@@ -72,6 +72,7 @@ def _save_profile(
     user_info: dict,
     client_id: str,
     tenant_id: str,
+    token_store_cls=None,
 ) -> str:
     """Persist token/user data in the standard profile format."""
     return save_profile(
@@ -81,7 +82,7 @@ def _save_profile(
         user_info=user_info,
         client_id=client_id,
         tenant_id=tenant_id,
-        token_store_cls=TokenStore,
+        token_store_cls=token_store_cls or TokenStore,
     )
 
 
@@ -104,13 +105,14 @@ def _ensure_profile_token(
     profile_name: str,
     profile_data: dict,
     store: TokenStore,
+    auth_cls=None,
 ) -> dict:
     """Refresh profile access token if required and persist updates."""
     return ensure_profile_token(
         profile_name=profile_name,
         profile_data=profile_data,
         store=store,
-        auth_cls=MicrosoftAuth,
+        auth_cls=auth_cls or MicrosoftAuth,
     )
 
 
@@ -369,6 +371,14 @@ def main():
         help="Run a single operation (upload/download/list/delete/move/mkdir/exists)",
     )
     run_parser.add_argument("--profile", "-p", help="Profile name (default: default)")
+    run_parser.add_argument(
+        "--sharepoint-url",
+        help="SharePoint site URL (use with --remote-path)",
+    )
+    run_parser.add_argument(
+        "--folder-url",
+        help="Full SharePoint folder URL (alternative to --sharepoint-url + --remote-path)",
+    )
     run_parser.add_argument(
         "--op",
         required=True,

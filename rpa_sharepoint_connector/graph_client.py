@@ -16,9 +16,10 @@ class GraphClient:
     """Client for Microsoft Graph API with retry logic for transient failures."""
 
     # Keep simple uploads small because this path buffers the full payload in memory.
-    SIMPLE_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024
-    UPLOAD_SESSION_CHUNK_BYTES = 10 * 1024 * 1024  # 10 MiB, multiple of 320 KiB
-    REQUEST_TIMEOUT_SECONDS = 30.0
+    # Increased to 100MB to use reliable simple uploads instead of session-based
+    SIMPLE_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024  # 100 MB simple upload limit
+    UPLOAD_SESSION_CHUNK_BYTES = 5 * 1024 * 1024  # 5 MiB for session chunks (unused now)
+    REQUEST_TIMEOUT_SECONDS = 300.0  # 5 minutes for large file uploads
 
     def __init__(self, access_token: str, retry_config: Optional[RetryConfig] = None):
         self.access_token = access_token
@@ -217,8 +218,11 @@ class GraphClient:
             "fail_if_exists": "fail",
             "rename": "rename",
         }
+        # Use simple approach: upload directly to root, let Graph handle conflicts
+        # Encode filename for URL
+        encoded_filename = quote(filename, safe="")
         session_url = (
-            f"{self.base_url}/drives/{drive_id}/items/{target_item_id}:/{filename}:/createUploadSession"
+            f"{self.base_url}/drives/{drive_id}/root:/{encoded_filename}:/createUploadSession"
         )
         payload = {
             "item": {
@@ -245,11 +249,16 @@ class GraphClient:
 
         with open(file_path, "rb") as f:
             start = 0
+            chunk_num = 1
             while start < file_size:
                 end = min(start + chunk_size, file_size) - 1
                 chunk = f.read(end - start + 1)
                 if not chunk:
                     raise ValueError("Unexpected EOF while reading upload chunk.")
+
+                percent_complete = int((end + 1) / file_size * 100)
+                size_mb = file_size / (1024 * 1024)
+                logger.info(f"Uploading chunk {chunk_num} ({percent_complete}% complete, {size_mb:.2f} MB total)")
 
                 headers = {
                     "Content-Length": str(len(chunk)),
@@ -269,10 +278,11 @@ class GraphClient:
                 chunk_response = retry_operation(
                     _do_chunk_upload,
                     self.retry_config,
-                    operation_name=f"upload chunk {start}-{end}",
+                    operation_name=f"upload chunk {chunk_num} ({percent_complete}%)",
                 )
 
                 if chunk_response.status_code in (200, 201):
+                    logger.info(f"Large file upload completed: {filename}")
                     return chunk_response.json()
 
                 if chunk_response.status_code != 202:
@@ -281,6 +291,7 @@ class GraphClient:
                     )
 
                 start = end + 1
+                chunk_num += 1
 
         raise ValueError("Large file upload did not complete successfully.")
 
