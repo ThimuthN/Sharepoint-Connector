@@ -1,43 +1,23 @@
-# Changelog
+# What's New
 
-All notable changes to this project will be documented in this file.
+## 1.1.0 (May 14, 2026)
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+**New**
+- `--folder-url` parameter - just copy-paste the SharePoint folder URL from your browser
+- Both URL formats work now - use simple mode or the detailed mode, whatever you prefer
+- Files up to 100 MB now (was 4 MB before)
+- 5-minute timeout for uploads (was 30 seconds) - way better for larger files
+- Better progress logging so you know what's happening
 
-## [1.1.0] - 2026-05-14
+**Fixed**
+- URL encoding issues with special characters in filenames
+- CLI wrapper functions weren't accepting all the right parameters
 
-### Added
-- **New `--folder-url` parameter** - Simplified usage by accepting full folder URLs
-  - Users can now copy-paste SharePoint folder URLs directly
-  - Example: `--folder-url "https://company.sharepoint.com/Documents/Inbox"`
-- **Dual URL format support** - Both simple and flexible URL approaches work
-  - Simple: `--folder-url` with just the filename
-  - Flexible: `--sharepoint-url` + `--remote-path` for granular control
-- **Large file support** - Upload files up to 100 MB
-  - Previous limit: 4 MB
-  - New limit: 100 MB with 5-minute timeout
-  - Automatic retry logic for network failures
-- **Wrapper function fixes** - Fixed parameter passing in CLI wrappers
-  - `_save_profile()` now accepts `token_store_cls` parameter
-  - `_ensure_profile_token()` now accepts `auth_cls` parameter
-
-### Improved
-- **Timeout settings** - Increased from 30s to 300s (5 minutes)
-  - Better support for large file uploads
-  - More reliable on slower networks
-- **Upload session handling** - Now uses simple uploads for all files up to 100 MB
-  - More reliable than session-based chunked uploads
-  - Faster and simpler implementation
-- **Progress logging** - Better feedback during upload operations
-  - Upload progress shown as percentage
-  - File size and speed information logged
-- **Documentation** - Comprehensive README with examples
-  - Quick start guide (2-minute setup)
-  - Azure app registration instructions
-  - Usage examples for all operations
-  - Troubleshooting guide
-  - Real-world RPA examples (UiPath, Python, Bash)
+**Docs**
+- New comprehensive README with 2-minute quick start
+- Step-by-step Azure setup instructions
+- Examples for UiPath, Python, and Bash
+- Troubleshooting section with common errors
 
 ### Fixed
 - **URL encoding** - Proper handling of special characters in filenames

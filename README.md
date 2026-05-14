@@ -1,17 +1,24 @@
 # RPA SharePoint Connector
 
-A lightweight, production-ready Python connector for SharePoint and OneDrive, designed for RPA bots and automation workflows.
+A simple Python tool for automating file operations in SharePoint and OneDrive. Works with UiPath, Blue Prism, automation scripts, and anything that can run Python.
 
-**Perfect for:** UiPath, Automation Anywhere, Blue Prism, custom schedulers, and Python-based automation.
+Whether you're building a bot to process invoices, archive documents, or sync files between systems, this tool handles the SharePoint part.
 
-## Features
+## What it does
 
-✨ **Simple Setup** - One-time OAuth authentication, no API keys or secrets  
-🔒 **Secure** - Encrypted local token storage, automatic token refresh  
-⚡ **Fast** - Optimized uploads up to 100 MB, supports large files  
-🔄 **Reliable** - Automatic retry logic, conflict handling, resumable transfers  
-🎯 **Flexible** - Works with OneDrive, SharePoint sites, nested folders  
-📊 **Bot-Friendly** - JSON output for parsing, non-interactive runtime  
+- **Upload/download files** - Push files to SharePoint, pull them back down
+- **List folders** - See what's in a SharePoint folder with JSON output
+- **Move, delete, create folders** - Automate file organization
+- **Handle conflicts** - Overwrite, rename, or fail based on what you need
+- **Large files** - Works with files up to 100 MB
+- **No browser at runtime** - Set it up once, then it runs without opening browser windows
+
+## Why use this
+
+- **Simple auth** - Just one-time browser login, no API keys to manage
+- **Works everywhere** - UiPath, Blue Prism, shell scripts, Python code
+- **Reliable** - Auto-retries on network failures
+- **Secure** - Credentials encrypted locally, never sent to external servers
 
 ## Quick Start (2 Minutes)
 
@@ -62,39 +69,38 @@ pip install -e ".[dev]"
 
 ---
 
-## Azure App Registration (Required)
+## Set up in Azure (One Time)
 
-Before using the connector, register an app in Microsoft Azure:
+You need to register an app in Azure first. Here's how:
 
-### Step 1: Create App Registration
-1. Go to [Azure Portal](https://portal.azure.com)
-2. Search for **"App registrations"**
-3. Click **"New registration"**
-4. Enter a name (e.g., "SharePoint Connector")
-5. Select **"Accounts in any organizational directory"**
-6. Click **Register**
+1. **Create the app**
+   - Go to [portal.azure.com](https://portal.azure.com)
+   - Search for "App registrations" and click it
+   - Click "New registration"
+   - Name it (e.g., "My SharePoint Bot")
+   - Pick "Accounts in any organizational directory"
+   - Click Register
 
-### Step 2: Configure Permissions
-1. Go to **API permissions**
-2. Click **"Add a permission"** → **Microsoft Graph**
-3. Select **"Delegated permissions"**
-4. Search and add:
-   - `offline_access`
-   - `User.Read`
-   - `Files.ReadWrite.All`
-   - `Sites.ReadWrite.All`
-5. Click **Grant admin consent for [Your Organization]**
+2. **Give it permissions**
+   - Go to "API permissions" in the left menu
+   - Click "Add a permission" → "Microsoft Graph" → "Delegated permissions"
+   - Search for and add these 4:
+     - `offline_access` (so it can refresh tokens)
+     - `User.Read` (to get your info)
+     - `Files.ReadWrite.All` (to read/write files)
+     - `Sites.ReadWrite.All` (to access SharePoint sites)
+   - Click "Grant admin consent" at the top
 
-### Step 3: Configure Redirect URI
-1. Go to **Authentication**
-2. Click **"Add a platform"** → **Web**
-3. Add: `http://localhost/callback`
-4. Click **Save**
+3. **Set the callback URL**
+   - Go to "Authentication" in the left menu
+   - Click "Add a platform" → pick "Web"
+   - Add `http://localhost/callback`
+   - Click Save
 
-### Step 4: Copy Your Client ID
-1. Go to **Overview**
-2. Copy the **Application (client) ID**
-3. Use this ID in the setup command
+4. **Copy your Client ID**
+   - Go to "Overview"
+   - Copy the "Application (client) ID"
+   - You'll use this in the next step
 
 ---
 
@@ -292,42 +298,45 @@ python -m rpa_sharepoint_connector disconnect --profile default --yes
 
 ## Troubleshooting
 
-### "Profile not found"
-**Solution:** Configure first
+**Profile not found?**
+Haven't set up yet. Run:
 ```bash
 python -m rpa_sharepoint_connector configure --profile default --client-id YOUR_APP_ID
 ```
 
-### "Token expired"
-**Solution:** Reconfigure with --force
+**Token expired?**
+Your login token expired. Just reconfigure:
 ```bash
 python -m rpa_sharepoint_connector configure --profile default --client-id YOUR_APP_ID --force
 ```
 
-### "Access denied" during setup
-**Solution:** Check Azure app permissions
-1. Go to Azure Portal → App registrations
-2. Check "API permissions" → verify all 4 permissions are granted
-3. Click "Grant admin consent"
-4. Try setup again
+**"Access denied" during setup?**
+The Azure app doesn't have the right permissions:
+1. Go to [portal.azure.com](https://portal.azure.com)
+2. Find your app in "App registrations"
+3. Click "API permissions"
+4. Make sure all 4 permissions are there (Files.ReadWrite.All, Sites.ReadWrite.All, etc.)
+5. Click "Grant admin consent" at the top
+6. Try setup again
 
-### "File already exists"
-**Solution:** Use conflict handling
+**File already exists error?**
+Use the `--conflict` flag:
 ```bash
---conflict rename  # Creates file (1).pdf if file.pdf exists
---conflict overwrite  # Replaces existing file (default)
---conflict fail_if_exists  # Raises error if exists
+--conflict overwrite   # Replace it (default)
+--conflict rename      # Create file (1).pdf instead
+--conflict fail_if_exists  # Raise error instead of uploading
 ```
 
-### "Folder not found"
-**Solution:** Ensure folder exists
+**Folder not found?**
+The folder might not exist. Check what's there:
 ```bash
-# List folders first
 python -m rpa_sharepoint_connector run --profile default --op list \
   --sharepoint-url "https://company.sharepoint.com" \
   --folder-path "Documents"
+```
 
-# Create if missing
+Or create it:
+```bash
 python -m rpa_sharepoint_connector run --profile default --op mkdir \
   --sharepoint-url "https://company.sharepoint.com" \
   --folder-path "Documents/NewFolder"
@@ -335,87 +344,85 @@ python -m rpa_sharepoint_connector run --profile default --op mkdir \
 
 ---
 
-## Real-World Examples
+## Examples
 
-### UiPath RPA Bot
+### UiPath (Drag & drop PowerShell)
+
+In UiPath Designer, use "Invoke PowerShell":
+
 ```
-Invoke PowerShell Activity:
-  Command: python -m rpa_sharepoint_connector run --profile default --op upload --folder-url "https://..." --local-path "C:\temp\file.pdf" --remote-path "file.pdf"
-  
-Invoke PowerShell Activity:
-  Command: python -m rpa_sharepoint_connector run --profile default --op list --folder-url "https://..." --json
-  Output: save to ListOutput variable
-  
-Deserialize JSON Activity:
-  Input: ListOutput
-  Output: ParsedList
+# Upload a file
+python -m rpa_sharepoint_connector run --profile default --op upload \
+  --folder-url "https://company.sharepoint.com/Documents/Bot" \
+  --local-path "C:\temp\invoice.pdf" \
+  --remote-path "invoice.pdf"
+
+# List files and save JSON to variable
+python -m rpa_sharepoint_connector run --profile default --op list \
+  --folder-url "https://company.sharepoint.com/Documents/Bot" --json
 ```
 
-### Python Bot (RPA Framework)
+### Python (Basic)
+
 ```python
-from RPA.Robotic_process_automation import RPA
 import subprocess
 import json
 
-def upload_to_sharepoint(file_path, remote_path):
-    result = subprocess.run([
-        'python', '-m', 'rpa_sharepoint_connector', 'run',
-        '--profile', 'default',
-        '--op', 'upload',
-        '--folder-url', 'https://company.sharepoint.com/Documents/Bot',
-        '--local-path', file_path,
-        '--remote-path', remote_path
-    ], capture_output=True, text=True)
-    
-    if result.returncode == 0:
-        print("Upload successful!")
-    else:
-        print(f"Upload failed: {result.stderr}")
-
-def list_sharepoint_files():
-    result = subprocess.run([
-        'python', '-m', 'rpa_sharepoint_connector', 'run',
-        '--profile', 'default',
-        '--op', 'list',
-        '--folder-url', 'https://company.sharepoint.com/Documents/Bot',
-        '--json'
-    ], capture_output=True, text=True)
-    
-    files = json.loads(result.stdout)
-    return files['items']
-```
-
-### Command-Line Batch Processing
-```bash
-#!/bin/bash
-# Process all PDF files in a folder
-
-SHAREPOINT_URL="https://company.sharepoint.com/Documents/Inbox"
-LOCAL_DIR="./files_to_process"
+# Upload a file
+subprocess.run([
+    'python', '-m', 'rpa_sharepoint_connector', 'run',
+    '--profile', 'default',
+    '--op', 'upload',
+    '--folder-url', 'https://company.sharepoint.com/Documents/Inbox',
+    '--local-path', 'report.pdf',
+    '--remote-path', 'report.pdf'
+])
 
 # List files
+result = subprocess.run([
+    'python', '-m', 'rpa_sharepoint_connector', 'run',
+    '--profile', 'default',
+    '--op', 'list',
+    '--folder-url', 'https://company.sharepoint.com/Documents/Inbox',
+    '--json'
+], capture_output=True, text=True)
+
+files = json.loads(result.stdout)
+for file in files['items']:
+    print(f"Found: {file['name']}")
+```
+
+### Bash (Batch processing)
+
+Process all PDFs from an inbox folder:
+
+```bash
+#!/bin/bash
+
+INBOX="https://company.sharepoint.com/Documents/Inbox"
+
+# Get list of files
 FILES=$(python -m rpa_sharepoint_connector run --profile default \
-  --op list --folder-url "$SHAREPOINT_URL" --json | jq -r '.items[].name')
+  --op list --folder-url "$INBOX" --json | jq -r '.items[].name')
 
 # Download and process each
 for file in $FILES; do
-  echo "Processing: $file"
+  echo "Processing $file..."
   
-  # Download
   python -m rpa_sharepoint_connector run --profile default \
-    --op download --folder-url "$SHAREPOINT_URL" \
-    --remote-path "$file" --local-path "$LOCAL_DIR/$file"
+    --op download --folder-url "$INBOX" \
+    --remote-path "$file" --local-path "$file"
   
-  # Process (your business logic here)
-  # ...
+  # Do your processing here (OCR, extract data, etc.)
+  # process_pdf.py "$file"
   
-  # Move to processed folder
+  # Move to completed folder
   python -m rpa_sharepoint_connector run --profile default \
     --op move --sharepoint-url "https://company.sharepoint.com" \
     --source-path "Documents/Inbox/$file" \
     --target-path "Documents/Processed"
   
-  echo "✓ Completed: $file"
+  echo "✓ Done: $file"
 done
 ```
 
