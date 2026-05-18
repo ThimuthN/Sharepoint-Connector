@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Dict, Optional
 from cryptography.fernet import Fernet
@@ -74,12 +75,32 @@ class TokenStore:
             encrypted_data["refresh_token"] = self._encrypt(encrypted_data["refresh_token"])
 
         profile_file = self._profile_path(profile_name)
-        profile_file.write_text(
-            json.dumps(encrypted_data, indent=2, default=str),
+        profile_json = json.dumps(encrypted_data, indent=2, default=str)
+
+        # Write atomically: temp file -> rename
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=self.store_dir,
+            prefix=f".{profile_name}.",
+            suffix=".tmp",
             encoding="utf-8",
-        )
-        profile_file.chmod(0o600)
-        logger.info(f"Saved profile: {profile_name}")
+            delete=False,
+        ) as tmp:
+            tmp_path = tmp.name
+            tmp.write(profile_json)
+
+        try:
+            # Set permissions on temp file before rename
+            os.chmod(tmp_path, 0o600)
+            # Atomic rename
+            os.replace(tmp_path, profile_file)
+            logger.info(f"Saved profile: {profile_name}")
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def load_profile(self, profile_name: str) -> Optional[Dict]:
         """Load and decrypt profile."""

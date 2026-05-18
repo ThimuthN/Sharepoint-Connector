@@ -121,6 +121,18 @@ class GraphClient:
         filename: str,
     ) -> Dict:
         """Upload a file with simple PUT /content API."""
+        # Validate file exists and is not a symlink
+        if not os.path.isfile(file_path) or os.path.islink(file_path):
+            raise ValueError(f"Invalid file path (not a regular file or is symlink): {file_path}")
+
+        # Validate file size before reading
+        try:
+            file_size = os.path.getsize(file_path)
+            if file_size > self.SIMPLE_UPLOAD_LIMIT_BYTES:
+                raise ValueError(f"File exceeds simple upload limit ({file_size} > {self.SIMPLE_UPLOAD_LIMIT_BYTES} bytes)")
+        except OSError as e:
+            raise ValueError(f"Failed to get file size: {str(e)}") from e
+
         try:
             with open(file_path, "rb") as f:
                 file_content = f.read()
@@ -181,17 +193,29 @@ class GraphClient:
             }
         }
 
-        client = self._get_client()
-        session_response = client.post(
-            session_url,
-            json=payload,
-            headers=self.headers,
-            timeout=self.REQUEST_TIMEOUT_SECONDS,
-        )
-        session_response.raise_for_status()
-        upload_url = session_response.json().get("uploadUrl")
-        if not upload_url:
-            raise ValueError("Upload session created but no uploadUrl returned.")
+        def _create_upload_session():
+            client = self._get_client()
+            session_response = client.post(
+                session_url,
+                json=payload,
+                headers=self.headers,
+                timeout=self.REQUEST_TIMEOUT_SECONDS,
+            )
+            session_response.raise_for_status()
+            upload_url = session_response.json().get("uploadUrl")
+            if not upload_url:
+                raise ValueError("Upload session created but no uploadUrl returned.")
+            return upload_url
+
+        try:
+            upload_url = retry_operation(
+                _create_upload_session,
+                self.retry_config,
+                operation_name=f"create upload session for {filename}",
+            )
+        except (ValueError, httpx.HTTPError) as e:
+            logger.error(f"Failed to create upload session: {e}")
+            raise ValueError(f"Failed to create upload session: {str(e)}") from e
 
         chunk_size = self.UPLOAD_SESSION_CHUNK_BYTES
         if chunk_size % (320 * 1024) != 0:
@@ -233,7 +257,15 @@ class GraphClient:
 
                 if chunk_response.status_code in (200, 201):
                     logger.info(f"Large file upload completed: {filename}")
-                    return chunk_response.json()
+                    try:
+                        return chunk_response.json()
+                    except (ValueError, RuntimeError):
+                        # Response has no JSON body, but upload succeeded
+                        return {"id": "", "name": filename}
+
+                if chunk_response.status_code == 204:
+                    logger.info(f"Large file upload completed: {filename}")
+                    return {"id": "", "name": filename}
 
                 if chunk_response.status_code != 202:
                     raise ValueError(
@@ -274,7 +306,20 @@ class GraphClient:
         """Download a file directly to disk with retry-safe temp-file staging."""
         url = f"{self.base_url}/drives/{drive_id}/items/{item_id}/content"
         target_path = os.path.abspath(local_path)
+
+        # Resolve real path to prevent symlink attacks
+        target_path = os.path.realpath(target_path)
         target_dir = os.path.dirname(target_path) or os.getcwd()
+
+        # Validate target directory is not a symlink
+        if os.path.islink(target_dir):
+            raise ValueError(f"Target directory is a symlink (security risk): {target_dir}")
+
+        # Check parent directory too (prevent traversal to parent via symlink)
+        parent_dir = os.path.dirname(target_dir)
+        if parent_dir and os.path.islink(parent_dir):
+            raise ValueError(f"Parent directory is a symlink (security risk): {parent_dir}")
+
         os.makedirs(target_dir, exist_ok=True)
 
         def _do_download_to_path():

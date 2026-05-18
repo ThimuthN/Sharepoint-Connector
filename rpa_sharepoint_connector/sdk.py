@@ -1,10 +1,18 @@
 """Simple SDK for RPA bots to interact with SharePoint."""
 import logging
+import os
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List, Dict, Optional
 from .auth import MicrosoftAuth
 from .token_store import TokenStore
 from .graph_client import GraphClient
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 logger = logging.getLogger(__name__)
 
@@ -267,22 +275,50 @@ class SharePointClient:
         expires_at = datetime.fromisoformat(self.profile_data["expires_at"])
 
         if datetime.utcnow() >= expires_at - timedelta(minutes=5):
-            logger.info(f"Token expired for {self.profile}, refreshing...")
+            lock_path = Path(self.store.store_dir) / f".{self.profile}.lock"
+            lock_file = None
             try:
-                token_response = self.auth.refresh_token(
-                    self.profile_data["refresh_token"]
-                )
-                self.profile_data["access_token"] = token_response["access_token"]
-                self.profile_data["refresh_token"] = token_response.get(
-                    "refresh_token", self.profile_data["refresh_token"]
-                )
-                self.profile_data["expires_at"] = (
-                    datetime.utcnow() + timedelta(seconds=token_response["expires_in"])
-                ).isoformat()
+                lock_file = open(lock_path, "w")
+                if sys.platform == "win32":
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
 
-                # Update stored profile
-                self.store.save_profile(self.profile, self.profile_data)
-                logger.info("Token refreshed successfully")
-            except Exception as e:
-                logger.error(f"Token refresh failed: {e}")
-                raise
+                # Re-read profile in case another process refreshed it while waiting for lock
+                self.profile_data = self.store.load_profile(self.profile)
+                expires_at = datetime.fromisoformat(self.profile_data["expires_at"])
+
+                if datetime.utcnow() >= expires_at - timedelta(minutes=5):
+                    logger.info(f"Token expired for {self.profile}, refreshing...")
+                    try:
+                        token_response = self.auth.refresh_token(
+                            self.profile_data["refresh_token"]
+                        )
+                        self.profile_data["access_token"] = token_response["access_token"]
+                        self.profile_data["refresh_token"] = token_response.get(
+                            "refresh_token", self.profile_data["refresh_token"]
+                        )
+                        self.profile_data["expires_at"] = (
+                            datetime.utcnow() + timedelta(seconds=token_response["expires_in"])
+                        ).isoformat()
+
+                        # Update stored profile
+                        self.store.save_profile(self.profile, self.profile_data)
+                        logger.info("Token refreshed successfully")
+                    except Exception as e:
+                        logger.error(f"Token refresh failed: {e}")
+                        raise
+            finally:
+                if lock_file:
+                    if sys.platform == "win32":
+                        try:
+                            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                        except OSError:
+                            pass
+                    else:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    lock_file.close()
+                    try:
+                        lock_path.unlink()
+                    except OSError:
+                        pass
