@@ -101,18 +101,40 @@ class SharePointClient:
 
     def download(self, remote_path: str, local_path: str) -> None:
         """Download a file from SharePoint."""
+        full_path = self._build_remote_path(remote_path)
+        item_id = self._find_item_id(full_path)
+        self.graph.download_file_to_path(self.drive_id, item_id, local_path)
 
     def delete(self, remote_path: str) -> None:
         """Delete a file or folder."""
+        full_path = self._build_remote_path(remote_path)
+        item_id = self._find_item_id(full_path)
+        self.graph.delete_item(self.drive_id, item_id)
 
     def exists(self, remote_path: str) -> bool:
         """Check if file/folder exists."""
+        full_path = self._build_remote_path(remote_path)
+        try:
+            self._find_item_id(full_path)
+            return True
+        except ValueError:
+            return False
 
     def list(self, folder_path: str = "") -> List[Dict]:
         """List files and folders in a folder."""
+        full_path = self._build_remote_path(folder_path) if folder_path else ""
+        if full_path:
+            item_id = self._find_item_id(full_path)
+        else:
+            item_id = self.folder_id if self.folder_id != "root" else None
+
+        items = self.graph.list_items(self.drive_id, item_id)
+        return [{"name": item["name"], "id": item["id"], "is_folder": "folder" in item, "size": item.get("size", 0)} for item in items]
 
     def mkdir(self, folder_path: str) -> str:
         """Create a folder."""
+        full_path = self._build_remote_path(folder_path)
+        return self.graph._ensure_folder_path(self.drive_id, full_path)
 
     def move(
         self,
@@ -121,6 +143,13 @@ class SharePointClient:
         new_name: Optional[str] = None,
     ) -> None:
         """Move or rename a file/folder."""
+        full_source = self._build_remote_path(source_path)
+        full_target = self._build_remote_path(target_path)
+
+        item_id = self._find_item_id(full_source)
+        target_parent_id = self.graph._ensure_folder_path(self.drive_id, full_target)
+
+        self.graph.move_item(self.drive_id, item_id, target_parent_id, new_name=new_name)
 
     def _resolve_item_id(self, value: str) -> str:
         """Resolve a user-provided path or ID into a drive item ID.
@@ -216,6 +245,15 @@ class SharePointClient:
 
     def _find_item_id(self, path: str) -> str:
         """Find item ID from a path."""
+        normalized = path.strip("/") if path else ""
+        if not normalized:
+            return self.folder_id if self.folder_id != "root" else "root"
+
+        try:
+            item = self.graph.get_item_by_path(self.drive_id, normalized)
+            return item["id"]
+        except ValueError as e:
+            raise ValueError(f"Item not found: {path}") from e
 
     def _build_remote_path(self, path: str) -> str:
         """Build a drive-root-relative path from configured base folder and user input."""

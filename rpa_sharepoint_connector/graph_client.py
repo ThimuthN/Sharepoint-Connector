@@ -94,6 +94,24 @@ class GraphClient:
         conflict: str = "overwrite",
     ) -> Dict:
         """Upload a file to SharePoint with conflict handling."""
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError as e:
+            raise ValueError(f"Failed to get file size: {str(e)}") from e
+
+        normalized_path = self._normalize_drive_path(remote_path)
+        if "/" in normalized_path:
+            folder_path = "/".join(normalized_path.split("/")[:-1])
+            filename = normalized_path.split("/")[-1]
+            target_item_id = self._ensure_folder_path(drive_id, folder_path) if folder_path else "root"
+        else:
+            filename = normalized_path
+            target_item_id = "root"
+
+        if file_size <= self.SIMPLE_UPLOAD_LIMIT_BYTES:
+            return self._upload_file_simple(drive_id, target_item_id, file_path, filename)
+        else:
+            return self._upload_file_via_session(drive_id, target_item_id, file_path, filename, conflict, file_size)
 
     def _upload_file_simple(
         self,
@@ -229,6 +247,7 @@ class GraphClient:
 
     def download_file(self, drive_id: str, item_id: str) -> bytes:
         """Download a file from SharePoint."""
+        url = f"{self.base_url}/drives/{drive_id}/items/{item_id}/content"
 
         def _do_download():
             client = self._get_client()
@@ -306,6 +325,7 @@ class GraphClient:
 
     def delete_item(self, drive_id: str, item_id: str) -> None:
         """Delete a file or folder (idempotent)."""
+        url = f"{self.base_url}/drives/{drive_id}/items/{item_id}"
 
         def _do_delete():
             client = self._get_client()
@@ -342,6 +362,8 @@ class GraphClient:
 
     def create_folder(self, drive_id: str, item_id: str, folder_name: str) -> Dict:
         """Create a folder."""
+        url = f"{self.base_url}/drives/{drive_id}/items/{item_id}/children"
+        data = {"name": folder_name, "folder": {}}
 
         def _do_create():
             client = self._get_client()
@@ -372,6 +394,10 @@ class GraphClient:
         new_name: Optional[str] = None,
     ) -> Dict:
         """Move or rename an item."""
+        url = f"{self.base_url}/drives/{drive_id}/items/{item_id}"
+        data = {"parentReference": {"id": new_parent_id}}
+        if new_name:
+            data["name"] = new_name
 
         def _do_move():
             client = self._get_client()
@@ -396,11 +422,39 @@ class GraphClient:
 
     def _ensure_folder_path(self, drive_id: str, folder_path: str) -> str:
         """Ensure folder path exists, creating folders as needed."""
+        if not folder_path or folder_path == "/":
+            return "root"
+
+        normalized = self._normalize_drive_path(folder_path)
+        current_item_id = "root"
+
+        for folder_name in normalized.split("/"):
+            try:
+                item = self.get_item_by_path(drive_id, f"{'/'.join(normalized.split('/')[:normalized.split('/').index(folder_name)+1])}")
+                current_item_id = item["id"]
+            except ValueError:
+                created = self.create_folder(drive_id, current_item_id, folder_name)
+                current_item_id = created["id"]
+
+        return current_item_id
 
     def _generate_unique_filename(
         self, filename: str, existing_names: set
     ) -> str:
         """Generate a unique filename when target exists."""
+        if filename not in existing_names:
+            return filename
+
+        name_parts = filename.rsplit(".", 1)
+        base = name_parts[0]
+        ext = f".{name_parts[1]}" if len(name_parts) > 1 else ""
+
+        counter = 1
+        while True:
+            new_name = f"{base} ({counter}){ext}"
+            if new_name not in existing_names:
+                return new_name
+            counter += 1
     def _normalize_drive_path(path: str) -> str:
         """Normalize drive-relative path by removing empty segments."""
         return "/".join(segment for segment in (path or "").split("/") if segment)
@@ -445,6 +499,8 @@ class GraphClient:
 
     def _get(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
         """Make GET request to Microsoft Graph with retry."""
+        url = f"{self.base_url}{endpoint}"
+        return self._get_json(url, operation_name=f"GET {endpoint}", params=params)
 
     def _get_paginated(self, endpoint: str) -> List[Dict]:
         """Fetch all pages for list endpoints using @odata.nextLink."""
